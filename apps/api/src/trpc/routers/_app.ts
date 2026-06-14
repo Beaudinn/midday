@@ -34,6 +34,7 @@ import { searchRouter } from "./search";
 import { shortLinksRouter } from "./short-links";
 
 import { tagsRouter } from "./tags";
+import { taxRouter } from "./tax";
 import { teamRouter } from "./team";
 import { trackerEntriesRouter } from "./tracker-entries";
 import { trackerProjectsRouter } from "./tracker-projects";
@@ -75,6 +76,7 @@ export const appRouter = createTRPCRouter({
   billing: billingRouter,
 
   tags: tagsRouter,
+  tax: taxRouter,
   team: teamRouter,
   trackerEntries: trackerEntriesRouter,
   trackerProjects: trackerProjectsRouter,

@@ -5,11 +5,29 @@ import {
   protectedProcedure,
 } from "@api/trpc/init";
 import {
+  activateTaxServiceForTeam,
+  ensureTaxClientForTeam,
   getAdminClientTeams,
   getPlatformStaffByUserId,
+  getTaxServiceProducts,
   recordTaxAuditEvent,
 } from "@midday/db/queries";
 import { z } from "zod";
+
+const taxClientKindSchema = z.enum([
+  "private_person",
+  "household",
+  "sole_proprietor",
+  "company",
+]);
+
+const taxServiceProductCodeSchema = z.enum([
+  "vat_return",
+  "income_tax_private",
+  "income_tax_entrepreneur",
+  "via_retrieval",
+  "sba_monitoring",
+]);
 
 export const adminRouter = createTRPCRouter({
   me: protectedProcedure.query(async ({ ctx: { db, session } }) => {
@@ -41,5 +59,68 @@ export const adminRouter = createTRPCRouter({
       });
 
       return clients;
+    }),
+
+  taxServiceProducts: adminProcedure.query(async ({ ctx: { db } }) => {
+    return getTaxServiceProducts(db);
+  }),
+
+  activateTaxClient: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        clientKind: taxClientKindSchema,
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const client = await ensureTaxClientForTeam(db, {
+        teamId: input.teamId,
+        clientKind: input.clientKind,
+        assignedStaffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_client.activate",
+        resourceType: "tax_client",
+        resourceId: client.id,
+        metadata: {
+          clientKind: input.clientKind,
+        },
+      });
+
+      return client;
+    }),
+
+  activateTaxService: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        productCode: taxServiceProductCodeSchema,
+        clientKind: taxClientKindSchema.optional(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const result = await activateTaxServiceForTeam(db, {
+        teamId: input.teamId,
+        productCode: input.productCode,
+        clientKind: input.clientKind,
+        staffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_service.activate",
+        resourceType: "tax_entitlement",
+        resourceId: result.entitlement.id,
+        metadata: {
+          clientId: result.client.id,
+          productCode: result.product.code,
+        },
+      });
+
+      return result;
     }),
 });

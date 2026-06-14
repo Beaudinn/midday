@@ -51,9 +51,36 @@ Implemented foundation:
 - `admin.me` and `admin.clients`
 - `/admin` client-team list
 - onboarding workspace type selection
+- `tax_clients`
+- `tax_subjects`
+- `tax_client_subjects`
+- `tax_service_products`
+- `tax_entitlements`
+- `tax_service_orders`
+- admin activation for tax clients and manual service entitlements
 
-Future phases should add tax clients/subjects, entitlements, mandates, tax
-tasks, VAT return snapshots, Digipoort queues and income tax partner dossiers.
+Future phases should add mandates, tax tasks, VAT return snapshots, Digipoort
+queues and income tax partner dossiers.
+
+## Tax Client Core
+
+Tax clients sit above teams:
+
+- one `tax_clients` row per team in the first implementation
+- one or more `tax_subjects` linked through `tax_client_subjects`
+- service access through `tax_entitlements`
+- future customer purchases through `tax_service_orders`
+
+Admin can activate a team as:
+
+- private person
+- household
+- sole proprietor
+- company
+
+For now activation creates a primary subject placeholder from team data. Later
+intake screens should replace or enrich that subject with verified personal,
+partner, RSIN/BSN/KVK and VAT details.
 
 ## Compatibility Checks
 

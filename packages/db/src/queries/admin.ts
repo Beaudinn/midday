@@ -1,6 +1,7 @@
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import { platformStaff, taxAuditEvents, teams, usersOnTeam } from "../schema";
+import { getActiveTaxEntitlementsByTeamIds } from "./tax";
 
 export type PlatformStaff = typeof platformStaff.$inferSelect;
 
@@ -59,7 +60,7 @@ export async function getAdminClientTeams(
     query.where(filters);
   }
 
-  return query
+  const rows = await query
     .groupBy(
       teams.id,
       teams.name,
@@ -74,6 +75,53 @@ export async function getAdminClientTeams(
     )
     .orderBy(desc(teams.createdAt))
     .limit(params?.limit ?? 50);
+
+  const taxRows = await getActiveTaxEntitlementsByTeamIds(
+    db,
+    rows.map((row) => row.id),
+  );
+
+  const taxByTeamId = new Map<
+    string,
+    {
+      id: string;
+      kind: string;
+      status: string;
+      activeProductCodes: string[];
+      activeProductNames: string[];
+    }
+  >();
+
+  for (const row of taxRows) {
+    const entry = taxByTeamId.get(row.teamId) ?? {
+      id: row.clientId,
+      kind: row.clientKind,
+      status: row.clientStatus,
+      activeProductCodes: [],
+      activeProductNames: [],
+    };
+
+    if (
+      row.productCode &&
+      !entry.activeProductCodes.includes(row.productCode)
+    ) {
+      entry.activeProductCodes.push(row.productCode);
+    }
+
+    if (
+      row.productName &&
+      !entry.activeProductNames.includes(row.productName)
+    ) {
+      entry.activeProductNames.push(row.productName);
+    }
+
+    taxByTeamId.set(row.teamId, entry);
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    taxClient: taxByTeamId.get(row.id) ?? null,
+  }));
 }
 
 export async function recordTaxAuditEvent(

@@ -209,6 +209,55 @@ export const platformStaffRoleEnum = pgEnum("platform_staff_role", [
   "billing",
   "auditor",
 ]);
+export const taxClientKindEnum = pgEnum("tax_client_kind", [
+  "private_person",
+  "household",
+  "sole_proprietor",
+  "company",
+]);
+export const taxClientStatusEnum = pgEnum("tax_client_status", [
+  "lead",
+  "invited",
+  "active",
+  "paused",
+  "archived",
+]);
+export const taxSubjectTypeEnum = pgEnum("tax_subject_type", [
+  "private_person",
+  "sole_proprietor",
+  "company",
+]);
+export const taxClientSubjectRoleEnum = pgEnum("tax_client_subject_role", [
+  "primary",
+  "partner",
+  "dependent",
+  "business_entity",
+]);
+export const taxClientSubjectAccessStatusEnum = pgEnum(
+  "tax_client_subject_access_status",
+  ["active", "view_only", "removed"],
+);
+export const taxEntitlementSourceEnum = pgEnum("tax_entitlement_source", [
+  "team_plan",
+  "polar_subscription",
+  "polar_order",
+  "manual",
+]);
+export const taxEntitlementStatusEnum = pgEnum("tax_entitlement_status", [
+  "pending",
+  "active",
+  "paused",
+  "cancelled",
+  "expired",
+]);
+export const taxServiceOrderStatusEnum = pgEnum("tax_service_order_status", [
+  "draft",
+  "ordered",
+  "paid",
+  "in_progress",
+  "completed",
+  "cancelled",
+]);
 export const trackerStatusEnum = pgEnum("trackerStatus", [
   "in_progress",
   "completed",
@@ -4055,6 +4104,263 @@ export const taxAuditEvents = pgTable(
       columns: [table.actorStaffUserId],
       foreignColumns: [users.id],
       name: "tax_audit_events_actor_staff_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxClients = pgTable(
+  "tax_clients",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    primaryUserId: uuid("primary_user_id"),
+    clientKind: taxClientKindEnum("client_kind").notNull(),
+    status: taxClientStatusEnum().default("lead").notNull(),
+    assignedStaffUserId: uuid("assigned_staff_user_id"),
+    onboardingStatus: text("onboarding_status")
+      .default("not_started")
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_clients_team_id_key").on(table.teamId),
+    index("tax_clients_status_idx").on(table.status),
+    index("tax_clients_assigned_staff_idx").on(table.assignedStaffUserId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_clients_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.primaryUserId],
+      foreignColumns: [users.id],
+      name: "tax_clients_primary_user_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.assignedStaffUserId],
+      foreignColumns: [users.id],
+      name: "tax_clients_assigned_staff_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxSubjects = pgTable(
+  "tax_subjects",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    userId: uuid("user_id"),
+    subjectType: taxSubjectTypeEnum("subject_type").notNull(),
+    displayName: text("display_name").notNull(),
+    encryptedBsn: text("encrypted_bsn"),
+    encryptedRsin: text("encrypted_rsin"),
+    kvkNumber: text("kvk_number"),
+    vatNumber: text("vat_number"),
+    countryCode: text("country_code").default("NL").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("tax_subjects_user_id_idx").on(table.userId),
+    index("tax_subjects_country_code_idx").on(table.countryCode),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+      name: "tax_subjects_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxClientSubjects = pgTable(
+  "tax_client_subjects",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    role: taxClientSubjectRoleEnum().notNull(),
+    accessStatus: taxClientSubjectAccessStatusEnum("access_status")
+      .default("active")
+      .notNull(),
+    validFrom: date("valid_from"),
+    validTo: date("valid_to"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_client_subjects_client_subject_key").on(
+      table.clientId,
+      table.subjectId,
+    ),
+    index("tax_client_subjects_team_id_idx").on(table.teamId),
+    index("tax_client_subjects_subject_id_idx").on(table.subjectId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_client_subjects_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_client_subjects_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.subjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_client_subjects_subject_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const taxServiceProducts = pgTable(
+  "tax_service_products",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    code: text().notNull(),
+    name: text().notNull(),
+    requiredMandates: text("required_mandates")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    defaultReturnType: text("default_return_type"),
+    polarProductId: text("polar_product_id"),
+    includedInPlans: text("included_in_plans")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    active: boolean().default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_service_products_code_key").on(table.code),
+    index("tax_service_products_active_idx").on(table.active),
+  ],
+);
+
+export const taxEntitlements = pgTable(
+  "tax_entitlements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    source: taxEntitlementSourceEnum().notNull(),
+    sourceRef: text("source_ref"),
+    status: taxEntitlementStatusEnum().default("pending").notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true, mode: "string" }),
+    autoRequestMandates: boolean("auto_request_mandates")
+      .default(true)
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("tax_entitlements_client_status_idx").on(
+      table.clientId,
+      table.status,
+    ),
+    index("tax_entitlements_team_status_idx").on(table.teamId, table.status),
+    index("tax_entitlements_client_product_source_idx").on(
+      table.clientId,
+      table.productId,
+      table.source,
+      table.sourceRef,
+    ),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_entitlements_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_entitlements_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.productId],
+      foreignColumns: [taxServiceProducts.id],
+      name: "tax_entitlements_product_id_fkey",
+    }).onDelete("restrict"),
+  ],
+);
+
+export const taxServiceOrders = pgTable(
+  "tax_service_orders",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    taxYear: integer("tax_year"),
+    period: text(),
+    polarOrderId: text("polar_order_id"),
+    status: taxServiceOrderStatusEnum().default("draft").notNull(),
+    orderedByUserId: uuid("ordered_by_user_id"),
+    createdByStaffUserId: uuid("created_by_staff_user_id"),
+    orderedAt: timestamp("ordered_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("tax_service_orders_client_status_idx").on(
+      table.clientId,
+      table.status,
+    ),
+    index("tax_service_orders_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_service_orders_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_service_orders_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.productId],
+      foreignColumns: [taxServiceProducts.id],
+      name: "tax_service_orders_product_id_fkey",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.orderedByUserId],
+      foreignColumns: [users.id],
+      name: "tax_service_orders_ordered_by_user_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.createdByStaffUserId],
+      foreignColumns: [users.id],
+      name: "tax_service_orders_created_by_staff_user_id_fkey",
     }).onDelete("set null"),
   ],
 );

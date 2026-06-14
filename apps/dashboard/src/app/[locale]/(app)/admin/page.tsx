@@ -11,6 +11,7 @@ import {
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AdminTaxClientActions } from "@/components/admin/tax-client-actions";
 import { getQueryClient, trpc } from "@/trpc/server";
 
 export const metadata: Metadata = {
@@ -100,9 +101,12 @@ export default async function AdminPage() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Workspace</TableHead>
+                <TableHead>Tax</TableHead>
+                <TableHead>Services</TableHead>
                 <TableHead>Plan</TableHead>
                 <TableHead>Members</TableHead>
                 <TableHead>Created</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -122,6 +126,35 @@ export default async function AdminPage() {
                     <Badge variant="outline">{client.workspaceType}</Badge>
                   </TableCell>
                   <TableCell>
+                    {client.taxClient ? (
+                      <div className="flex flex-col gap-1">
+                        <Badge variant="outline">{client.taxClient.kind}</Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {client.taxClient.status}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        Not active
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {client.taxClient?.activeProductNames.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {client.taxClient.activeProductNames.map((name) => (
+                          <Badge key={name} variant="outline">
+                            {name}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        No services
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
                     <span className="text-sm">{client.plan}</span>
                   </TableCell>
                   <TableCell>
@@ -131,6 +164,16 @@ export default async function AdminPage() {
                     <span className="text-sm text-muted-foreground">
                       {dateFormatter.format(new Date(client.createdAt))}
                     </span>
+                  </TableCell>
+                  <TableCell>
+                    <AdminTaxClientActions
+                      teamId={client.id}
+                      workspaceType={client.workspaceType}
+                      hasTaxClient={Boolean(client.taxClient)}
+                      activeProductCodes={
+                        client.taxClient?.activeProductCodes ?? []
+                      }
+                    />
                   </TableCell>
                 </TableRow>
               ))}

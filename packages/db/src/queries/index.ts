@@ -34,6 +34,7 @@ export * from "./reports";
 export * from "./search";
 export * from "./short-links";
 export * from "./tags";
+export * from "./tax";
 export * from "./teams";
 export * from "./tracker-entries";
 export * from "./tracker-projects";
