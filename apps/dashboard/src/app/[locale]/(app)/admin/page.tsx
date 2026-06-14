@@ -24,6 +24,10 @@ const dateFormatter = new Intl.DateTimeFormat("en", {
   year: "numeric",
 });
 
+function mandateStatusLabel(status: string) {
+  return status.replaceAll("_", " ");
+}
+
 export default async function AdminPage() {
   const queryClient = getQueryClient();
 
@@ -103,6 +107,7 @@ export default async function AdminPage() {
                 <TableHead>Workspace</TableHead>
                 <TableHead>Tax</TableHead>
                 <TableHead>Services</TableHead>
+                <TableHead>Mandates</TableHead>
                 <TableHead>Plan</TableHead>
                 <TableHead>Members</TableHead>
                 <TableHead>Created</TableHead>
@@ -151,6 +156,45 @@ export default async function AdminPage() {
                     ) : (
                       <span className="text-sm text-muted-foreground">
                         No services
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {client.taxClient ? (
+                      client.taxClient.mandates.total ? (
+                        <div className="flex max-w-52 flex-wrap gap-1">
+                          <Badge variant="outline">
+                            {client.taxClient.mandates.total} total
+                          </Badge>
+                          {client.taxClient.mandates.openTasks > 0 && (
+                            <Badge variant="outline">
+                              {client.taxClient.mandates.openTasks} open
+                            </Badge>
+                          )}
+                          {client.taxClient.mandates.mandateTypes.map(
+                            (mandateType) => (
+                              <Badge key={mandateType} variant="outline">
+                                {mandateType}
+                              </Badge>
+                            ),
+                          )}
+                          {client.taxClient.mandates.statuses.map((status) => (
+                            <span
+                              key={status}
+                              className="text-xs text-muted-foreground"
+                            >
+                              {mandateStatusLabel(status)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">
+                          No mandates
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        Not active
                       </span>
                     )}
                   </TableCell>

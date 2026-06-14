@@ -9,8 +9,8 @@ table inside a client workspace.
 - `teamId` remains the tenant boundary for transactions, documents, invoices,
   reports, Vault and settings.
 - `customers` must not be used as the intermediary client table.
-- Tax client identity, subjects, mandates, returns and audit records live in
-  dedicated tax/admin tables.
+- Tax client identity, subjects, mandates, tasks, returns and audit records live
+  in dedicated tax/admin tables.
 - Existing business workspaces must keep working without a tax entitlement.
 - Admin/backoffice access is separate from customer workspace membership.
 
@@ -40,7 +40,7 @@ Backoffice procedures use `adminProcedure`:
 
 Internal worker calls should continue to use `internalProcedure`.
 
-## Phase 1 Scope
+## Implemented Scope
 
 Implemented foundation:
 
@@ -57,10 +57,13 @@ Implemented foundation:
 - `tax_service_products`
 - `tax_entitlements`
 - `tax_service_orders`
+- `tax_mandates`
+- `tax_tasks`
 - admin activation for tax clients and manual service entitlements
+- automatic mandate/task creation from service `required_mandates`
 
-Future phases should add mandates, tax tasks, VAT return snapshots, Digipoort
-queues and income tax partner dossiers.
+Future phases should add VAT return snapshots, Digipoort queues, income tax
+partner dossiers and customer-facing task completion screens.
 
 ## Tax Client Core
 
@@ -70,6 +73,8 @@ Tax clients sit above teams:
 - one or more `tax_subjects` linked through `tax_client_subjects`
 - service access through `tax_entitlements`
 - future customer purchases through `tax_service_orders`
+- Digipoort/SBR authorizations through `tax_mandates`
+- execution and activation-code work through `tax_tasks`
 
 Admin can activate a team as:
 
@@ -81,6 +86,24 @@ Admin can activate a team as:
 For now activation creates a primary subject placeholder from team data. Later
 intake screens should replace or enrich that subject with verified personal,
 partner, RSIN/BSN/KVK and VAT details.
+
+## Service Access And Mandates
+
+Services can be enabled by admin action, a subscription entitlement or a later
+service order. All paths should converge on `tax_entitlements`.
+
+When a service is activated, its `tax_service_products.required_mandates` values
+create or reuse `tax_mandates` for the primary/business subject:
+
+- `vat_return` requests `BTW`
+- `income_tax_private` requests `VIA`, `SBA` and `IB`
+- `income_tax_entrepreneur` requests `VIA`, `SBA` and `IB`
+- `via_retrieval` requests `VIA`
+- `sba_monitoring` requests `SBA`
+
+Each requested mandate creates an open `tax_tasks` row for the activation-code
+or authorization step. This lets Midday request authorizations before a customer
+orders a specific return, while still supporting orders and subscriptions later.
 
 ## Compatibility Checks
 

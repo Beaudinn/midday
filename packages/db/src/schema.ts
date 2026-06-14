@@ -258,6 +258,28 @@ export const taxServiceOrderStatusEnum = pgEnum("tax_service_order_status", [
   "completed",
   "cancelled",
 ]);
+export const taxMandateTypeEnum = pgEnum("tax_mandate_type", [
+  "VIA",
+  "SBA",
+  "BTW",
+  "IB",
+]);
+export const taxMandateStatusEnum = pgEnum("tax_mandate_status", [
+  "draft",
+  "requested",
+  "letter_sent",
+  "activation_required",
+  "active",
+  "rejected",
+  "expired",
+  "revoked",
+]);
+export const taxTaskStatusEnum = pgEnum("tax_task_status", [
+  "open",
+  "answered",
+  "resolved",
+  "cancelled",
+]);
 export const trackerStatusEnum = pgEnum("trackerStatus", [
   "in_progress",
   "completed",
@@ -4361,6 +4383,140 @@ export const taxServiceOrders = pgTable(
       columns: [table.createdByStaffUserId],
       foreignColumns: [users.id],
       name: "tax_service_orders_created_by_staff_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxMandates = pgTable(
+  "tax_mandates",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    entitlementId: uuid("entitlement_id"),
+    serviceOrderId: uuid("service_order_id"),
+    mandateType: taxMandateTypeEnum("mandate_type").notNull(),
+    taxYear: integer("tax_year"),
+    status: taxMandateStatusEnum().default("draft").notNull(),
+    activationCodeEncrypted: text("activation_code_encrypted"),
+    externalReference: text("external_reference"),
+    requestedAt: timestamp("requested_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    activatedAt: timestamp("activated_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("tax_mandates_current_key")
+      .on(table.clientId, table.subjectId, table.mandateType)
+      .where(sql`tax_year IS NULL`),
+    uniqueIndex("tax_mandates_year_key")
+      .on(table.clientId, table.subjectId, table.mandateType, table.taxYear)
+      .where(sql`tax_year IS NOT NULL`),
+    index("tax_mandates_client_status_idx").on(table.clientId, table.status),
+    index("tax_mandates_team_status_idx").on(table.teamId, table.status),
+    index("tax_mandates_subject_idx").on(table.subjectId),
+    index("tax_mandates_entitlement_idx").on(table.entitlementId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_mandates_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_mandates_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.subjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_mandates_subject_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.entitlementId],
+      foreignColumns: [taxEntitlements.id],
+      name: "tax_mandates_entitlement_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.serviceOrderId],
+      foreignColumns: [taxServiceOrders.id],
+      name: "tax_mandates_service_order_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxTasks = pgTable(
+  "tax_tasks",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    subjectId: uuid("subject_id"),
+    mandateId: uuid("mandate_id"),
+    assignedToUserId: uuid("assigned_to_user_id"),
+    assignedToStaffUserId: uuid("assigned_to_staff_user_id"),
+    title: text().notNull(),
+    description: text(),
+    status: taxTaskStatusEnum().default("open").notNull(),
+    dueDate: date("due_date"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    resolvedAt: timestamp("resolved_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+  },
+  (table) => [
+    index("tax_tasks_client_status_idx").on(table.clientId, table.status),
+    index("tax_tasks_team_status_idx").on(table.teamId, table.status),
+    index("tax_tasks_subject_idx").on(table.subjectId),
+    index("tax_tasks_mandate_idx").on(table.mandateId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_tasks_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_tasks_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.subjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_tasks_subject_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.mandateId],
+      foreignColumns: [taxMandates.id],
+      name: "tax_tasks_mandate_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.assignedToUserId],
+      foreignColumns: [users.id],
+      name: "tax_tasks_assigned_to_user_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.assignedToStaffUserId],
+      foreignColumns: [users.id],
+      name: "tax_tasks_assigned_to_staff_user_id_fkey",
     }).onDelete("set null"),
   ],
 );

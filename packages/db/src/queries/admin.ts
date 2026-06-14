@@ -1,7 +1,10 @@
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import { platformStaff, taxAuditEvents, teams, usersOnTeam } from "../schema";
-import { getActiveTaxEntitlementsByTeamIds } from "./tax";
+import {
+  getActiveTaxEntitlementsByTeamIds,
+  getTaxMandateSummariesByTeamIds,
+} from "./tax";
 
 export type PlatformStaff = typeof platformStaff.$inferSelect;
 
@@ -76,10 +79,11 @@ export async function getAdminClientTeams(
     .orderBy(desc(teams.createdAt))
     .limit(params?.limit ?? 50);
 
-  const taxRows = await getActiveTaxEntitlementsByTeamIds(
-    db,
-    rows.map((row) => row.id),
-  );
+  const teamIds = rows.map((row) => row.id);
+  const [taxRows, mandateSummaries] = await Promise.all([
+    getActiveTaxEntitlementsByTeamIds(db, teamIds),
+    getTaxMandateSummariesByTeamIds(db, teamIds),
+  ]);
 
   const taxByTeamId = new Map<
     string,
@@ -118,10 +122,30 @@ export async function getAdminClientTeams(
     taxByTeamId.set(row.teamId, entry);
   }
 
-  return rows.map((row) => ({
-    ...row,
-    taxClient: taxByTeamId.get(row.id) ?? null,
-  }));
+  const mandateSummaryByTeamId = new Map(
+    mandateSummaries.map((summary) => [summary.teamId, summary]),
+  );
+
+  return rows.map((row) => {
+    const taxClient = taxByTeamId.get(row.id);
+
+    return {
+      ...row,
+      taxClient: taxClient
+        ? {
+            ...taxClient,
+            mandates: mandateSummaryByTeamId.get(row.id) ?? {
+              total: 0,
+              active: 0,
+              actionRequired: 0,
+              openTasks: 0,
+              mandateTypes: [],
+              statuses: [],
+            },
+          }
+        : null,
+    };
+  });
 }
 
 export async function recordTaxAuditEvent(

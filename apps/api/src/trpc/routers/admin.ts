@@ -118,6 +118,8 @@ export const adminRouter = createTRPCRouter({
         metadata: {
           clientId: result.client.id,
           productCode: result.product.code,
+          mandateIds: result.mandates.map((mandate) => mandate.id),
+          taskIds: result.tasks.map((task) => task.id),
         },
       });
 

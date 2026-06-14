@@ -1,11 +1,13 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import {
   taxClientSubjects,
   taxClients,
   taxEntitlements,
+  taxMandates,
   taxServiceProducts,
   taxSubjects,
+  taxTasks,
   teams,
   usersOnTeam,
 } from "../schema";
@@ -17,6 +19,54 @@ export type TaxServiceProductCode =
   | "income_tax_entrepreneur"
   | "via_retrieval"
   | "sba_monitoring";
+export type TaxMandateType = typeof taxMandates.$inferSelect.mandateType;
+
+const taxMandateTypes = new Set<TaxMandateType>(["VIA", "SBA", "BTW", "IB"]);
+
+function toTaxMandateType(value: string): TaxMandateType | null {
+  return taxMandateTypes.has(value as TaxMandateType)
+    ? (value as TaxMandateType)
+    : null;
+}
+
+function mandateTaskTitle(mandateType: TaxMandateType) {
+  switch (mandateType) {
+    case "BTW":
+      return "Activate VAT authorization";
+    case "IB":
+      return "Activate income tax authorization";
+    case "SBA":
+      return "Activate SBA service messages";
+    case "VIA":
+      return "Activate VIA retrieval";
+  }
+}
+
+function mandateTaskDescription(mandateType: TaxMandateType) {
+  switch (mandateType) {
+    case "BTW":
+      return "Enter the activation code or authorization details for VAT return filing.";
+    case "IB":
+      return "Enter the activation code or authorization details for income tax filing.";
+    case "SBA":
+      return "Enter the activation code for service messages after the authorization letter is received.";
+    case "VIA":
+      return "Enter the activation code for pre-filled tax data retrieval after the authorization letter is received.";
+  }
+}
+
+function mandateTaskDueDate() {
+  const dueDate = new Date();
+  dueDate.setDate(dueDate.getDate() + 30);
+
+  return dueDate.toISOString().slice(0, 10);
+}
+
+function mandateNeedsTask(status: typeof taxMandates.$inferSelect.status) {
+  return ["draft", "requested", "letter_sent", "activation_required"].includes(
+    status,
+  );
+}
 
 function subjectTypeForClientKind(clientKind: TaxClientKind) {
   switch (clientKind) {
@@ -72,7 +122,7 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     return null;
   }
 
-  const [subjects, entitlements] = await Promise.all([
+  const [subjects, entitlements, mandates, tasks] = await Promise.all([
     db
       .select({
         id: taxSubjects.id,
@@ -99,12 +149,42 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
         eq(taxServiceProducts.id, taxEntitlements.productId),
       )
       .where(eq(taxEntitlements.clientId, client.id)),
+    db
+      .select({
+        id: taxMandates.id,
+        subjectId: taxMandates.subjectId,
+        entitlementId: taxMandates.entitlementId,
+        mandateType: taxMandates.mandateType,
+        status: taxMandates.status,
+        taxYear: taxMandates.taxYear,
+        requestedAt: taxMandates.requestedAt,
+        activatedAt: taxMandates.activatedAt,
+        expiresAt: taxMandates.expiresAt,
+      })
+      .from(taxMandates)
+      .where(eq(taxMandates.clientId, client.id)),
+    db
+      .select({
+        id: taxTasks.id,
+        subjectId: taxTasks.subjectId,
+        mandateId: taxTasks.mandateId,
+        title: taxTasks.title,
+        description: taxTasks.description,
+        status: taxTasks.status,
+        dueDate: taxTasks.dueDate,
+        createdAt: taxTasks.createdAt,
+        resolvedAt: taxTasks.resolvedAt,
+      })
+      .from(taxTasks)
+      .where(eq(taxTasks.clientId, client.id)),
   ]);
 
   return {
     ...client,
     subjects,
     entitlements,
+    mandates,
+    tasks,
   };
 }
 
@@ -281,10 +361,125 @@ export async function activateTaxServiceForTeam(
       throw new Error("Failed to activate tax entitlement");
     }
 
+    const [subjectLink] = await tx
+      .select({
+        subjectId: taxClientSubjects.subjectId,
+      })
+      .from(taxClientSubjects)
+      .where(eq(taxClientSubjects.clientId, client.id))
+      .orderBy(
+        sql`case ${taxClientSubjects.role} when 'primary' then 0 when 'business_entity' then 1 when 'partner' then 2 else 3 end`,
+      )
+      .limit(1);
+
+    if (!subjectLink) {
+      throw new Error("Tax subject not found");
+    }
+
+    const mandateTypes = [
+      ...new Set(
+        product.requiredMandates
+          .map(toTaxMandateType)
+          .filter(
+            (mandateType): mandateType is TaxMandateType =>
+              mandateType !== null,
+          ),
+      ),
+    ];
+    const mandates: (typeof taxMandates.$inferSelect)[] = [];
+    const tasks: (typeof taxTasks.$inferSelect)[] = [];
+
+    for (const mandateType of mandateTypes) {
+      const [existingMandate] = await tx
+        .select()
+        .from(taxMandates)
+        .where(
+          and(
+            eq(taxMandates.clientId, client.id),
+            eq(taxMandates.subjectId, subjectLink.subjectId),
+            eq(taxMandates.mandateType, mandateType),
+            isNull(taxMandates.taxYear),
+          ),
+        )
+        .limit(1);
+
+      const [mandate] = existingMandate
+        ? existingMandate.status === "draft"
+          ? await tx
+              .update(taxMandates)
+              .set({
+                status: "requested",
+                entitlementId: existingMandate.entitlementId ?? entitlement.id,
+                requestedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              })
+              .where(eq(taxMandates.id, existingMandate.id))
+              .returning()
+          : [existingMandate]
+        : await tx
+            .insert(taxMandates)
+            .values({
+              clientId: client.id,
+              teamId: params.teamId,
+              subjectId: subjectLink.subjectId,
+              entitlementId: entitlement.id,
+              mandateType,
+              status: "requested",
+            })
+            .returning();
+
+      if (!mandate) {
+        throw new Error("Failed to request tax mandate");
+      }
+
+      mandates.push(mandate);
+
+      if (!mandateNeedsTask(mandate.status)) {
+        continue;
+      }
+
+      const [existingTask] = await tx
+        .select()
+        .from(taxTasks)
+        .where(
+          and(eq(taxTasks.mandateId, mandate.id), eq(taxTasks.status, "open")),
+        )
+        .limit(1);
+
+      if (existingTask) {
+        tasks.push(existingTask);
+        continue;
+      }
+
+      const [task] = await tx
+        .insert(taxTasks)
+        .values({
+          clientId: client.id,
+          teamId: params.teamId,
+          subjectId: subjectLink.subjectId,
+          mandateId: mandate.id,
+          assignedToUserId: client.primaryUserId,
+          assignedToStaffUserId:
+            params.staffUserId ?? client.assignedStaffUserId,
+          title: mandateTaskTitle(mandateType),
+          description: mandateTaskDescription(mandateType),
+          dueDate: mandateTaskDueDate(),
+        })
+        .returning();
+
+      if (!task) {
+        throw new Error("Failed to create tax task");
+      }
+
+      tasks.push(task);
+    }
+
     return {
       client,
       entitlement,
       product,
+      mandates,
+      tasks,
     };
   });
 }
@@ -321,4 +516,95 @@ export async function getActiveTaxEntitlementsByTeamIds(
       eq(taxServiceProducts.id, taxEntitlements.productId),
     )
     .where(inArray(taxClients.teamId, teamIds));
+}
+
+export async function getTaxMandateSummariesByTeamIds(
+  db: Database,
+  teamIds: string[],
+) {
+  if (!teamIds.length) {
+    return [];
+  }
+
+  const [mandateRows, taskRows] = await Promise.all([
+    db
+      .select({
+        teamId: taxMandates.teamId,
+        mandateType: taxMandates.mandateType,
+        status: taxMandates.status,
+      })
+      .from(taxMandates)
+      .where(inArray(taxMandates.teamId, teamIds)),
+    db
+      .select({
+        teamId: taxTasks.teamId,
+        status: taxTasks.status,
+      })
+      .from(taxTasks)
+      .where(inArray(taxTasks.teamId, teamIds)),
+  ]);
+
+  const summaries = new Map<
+    string,
+    {
+      total: number;
+      active: number;
+      actionRequired: number;
+      openTasks: number;
+      mandateTypes: TaxMandateType[];
+      statuses: (typeof taxMandates.$inferSelect.status)[];
+    }
+  >();
+
+  const getSummary = (teamId: string) => {
+    const summary = summaries.get(teamId) ?? {
+      total: 0,
+      active: 0,
+      actionRequired: 0,
+      openTasks: 0,
+      mandateTypes: [],
+      statuses: [],
+    };
+
+    summaries.set(teamId, summary);
+
+    return summary;
+  };
+
+  for (const row of mandateRows) {
+    const summary = getSummary(row.teamId);
+
+    summary.total += 1;
+
+    if (row.status === "active") {
+      summary.active += 1;
+    }
+
+    if (mandateNeedsTask(row.status)) {
+      summary.actionRequired += 1;
+    }
+
+    if (!summary.mandateTypes.includes(row.mandateType)) {
+      summary.mandateTypes.push(row.mandateType);
+    }
+
+    if (!summary.statuses.includes(row.status)) {
+      summary.statuses.push(row.status);
+    }
+  }
+
+  for (const row of taskRows) {
+    if (row.status !== "open") {
+      continue;
+    }
+
+    const summary = getSummary(row.teamId);
+
+    summary.openTasks += 1;
+  }
+
+  return [...summaries.entries()].map(([teamId, summary]) => ({
+    teamId,
+    ...summary,
+  }));
 }
