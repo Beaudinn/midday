@@ -1,4 +1,4 @@
-import { encrypt } from "@midday/encryption";
+import { decrypt, encrypt } from "@midday/encryption";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import {
@@ -26,6 +26,33 @@ export type TaxServiceProductCode =
 export type TaxMandateType = typeof taxMandates.$inferSelect.mandateType;
 export type TaxDigipoortOperation =
   typeof taxDigipoortJobs.$inferSelect.operation;
+export type TaxDigipoortJobExecutionContext = {
+  job: typeof taxDigipoortJobs.$inferSelect;
+  mandate: {
+    id: string;
+    mandateType: TaxMandateType;
+    taxYear: number | null;
+    status: typeof taxMandates.$inferSelect.status;
+    activationCode: string | null;
+  };
+  subject: {
+    id: string;
+    subjectType: typeof taxSubjects.$inferSelect.subjectType;
+    displayName: string;
+    countryCode: string;
+    bsn: string | null;
+    rsin: string | null;
+    kvkNumber: string | null;
+    vatNumber: string | null;
+  };
+};
+export type TaxDigipoortJobExecutionResult = {
+  providerReference?: string | null;
+  result?: Record<string, unknown>;
+};
+export type TaxDigipoortJobExecutor = (
+  context: TaxDigipoortJobExecutionContext,
+) => Promise<TaxDigipoortJobExecutionResult>;
 export type TaxMandateDocumentExtraction = {
   activationCode: string | null;
   mandateType: TaxMandateType | null;
@@ -732,6 +759,7 @@ export async function processTaxDigipoortJob(
   params: {
     teamId: string;
     jobId: string;
+    executor?: TaxDigipoortJobExecutor;
   },
 ) {
   const [job] = await db
@@ -768,38 +796,132 @@ export async function processTaxDigipoortJob(
     .where(eq(taxDigipoortJobs.id, job.id));
 
   try {
-    if (job.operation !== "request_mandate") {
-      throw new Error(`Digipoort operation not implemented: ${job.operation}`);
-    }
-
     if (!job.mandateId) {
-      throw new Error("Digipoort mandate request job has no mandate id");
+      throw new Error(`Digipoort ${job.operation} job has no mandate id`);
     }
 
-    if (!shouldDryRunDigipoort()) {
-      throw new Error(
-        "Digipoort client is not configured. Set DIGIPOORT_DRY_RUN=true for development.",
-      );
+    const [mandateContext] = await db
+      .select({
+        mandateId: taxMandates.id,
+        mandateType: taxMandates.mandateType,
+        taxYear: taxMandates.taxYear,
+        mandateStatus: taxMandates.status,
+        activationCodeEncrypted: taxMandates.activationCodeEncrypted,
+        subjectId: taxSubjects.id,
+        subjectType: taxSubjects.subjectType,
+        displayName: taxSubjects.displayName,
+        encryptedBsn: taxSubjects.encryptedBsn,
+        encryptedRsin: taxSubjects.encryptedRsin,
+        kvkNumber: taxSubjects.kvkNumber,
+        vatNumber: taxSubjects.vatNumber,
+        countryCode: taxSubjects.countryCode,
+      })
+      .from(taxMandates)
+      .innerJoin(taxSubjects, eq(taxSubjects.id, taxMandates.subjectId))
+      .where(
+        and(
+          eq(taxMandates.id, job.mandateId),
+          eq(taxMandates.teamId, params.teamId),
+        ),
+      )
+      .limit(1);
+
+    if (!mandateContext) {
+      throw new Error("Digipoort mandate context not found");
     }
 
     const completedAt = new Date().toISOString();
-    const providerReference = `dry-run:${job.operation}:${job.id}`;
+    const executionContext: TaxDigipoortJobExecutionContext = {
+      job,
+      mandate: {
+        id: mandateContext.mandateId,
+        mandateType: mandateContext.mandateType,
+        taxYear: mandateContext.taxYear,
+        status: mandateContext.mandateStatus,
+        activationCode: mandateContext.activationCodeEncrypted
+          ? decrypt(mandateContext.activationCodeEncrypted)
+          : null,
+      },
+      subject: {
+        id: mandateContext.subjectId,
+        subjectType: mandateContext.subjectType,
+        displayName: mandateContext.displayName,
+        countryCode: mandateContext.countryCode,
+        bsn: mandateContext.encryptedBsn
+          ? decrypt(mandateContext.encryptedBsn)
+          : null,
+        rsin: mandateContext.encryptedRsin
+          ? decrypt(mandateContext.encryptedRsin)
+          : null,
+        kvkNumber: mandateContext.kvkNumber,
+        vatNumber: mandateContext.vatNumber,
+      },
+    };
+    const execution = shouldDryRunDigipoort()
+      ? {
+          providerReference: `dry-run:${job.operation}:${job.id}`,
+          result: {
+            dryRun: true,
+            accepted: true,
+            providerReference: `dry-run:${job.operation}:${job.id}`,
+            message:
+              "Dry-run Digipoort job accepted. Configure the WUS/SBR client for real processing.",
+          },
+        }
+      : await (async () => {
+          if (!params.executor) {
+            throw new Error(
+              "Digipoort executor is not configured. Set DIGIPOORT_DRY_RUN=true for development or configure the worker Digipoort client.",
+            );
+          }
+
+          return params.executor(executionContext);
+        })();
+    const providerReference =
+      execution.providerReference ?? `digipoort:${job.operation}:${job.id}`;
     const result = {
-      dryRun: true,
       accepted: true,
       providerReference,
-      message:
-        "Dry-run Digipoort mandate request accepted. Replace with SBR/Digipoort client.",
+      ...(execution.result ?? {}),
     };
 
-    await db
-      .update(taxMandates)
-      .set({
-        status: "letter_sent",
-        externalReference: providerReference,
-        updatedAt: completedAt,
-      })
-      .where(eq(taxMandates.id, job.mandateId));
+    if (job.operation === "request_mandate") {
+      await db
+        .update(taxMandates)
+        .set({
+          status: "letter_sent",
+          externalReference: providerReference,
+          updatedAt: completedAt,
+        })
+        .where(eq(taxMandates.id, job.mandateId));
+    }
+
+    if (job.operation === "activate_mandate") {
+      await db
+        .update(taxMandates)
+        .set({
+          status: "active",
+          externalReference: providerReference,
+          activatedAt: completedAt,
+          updatedAt: completedAt,
+        })
+        .where(eq(taxMandates.id, job.mandateId));
+
+      await db
+        .update(taxTasks)
+        .set({
+          status: "resolved",
+          resolvedAt: completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            eq(taxTasks.teamId, params.teamId),
+            eq(taxTasks.mandateId, job.mandateId),
+            inArray(taxTasks.status, ["open", "answered"]),
+          ),
+        );
+    }
 
     const [completedJob] = await db
       .update(taxDigipoortJobs)

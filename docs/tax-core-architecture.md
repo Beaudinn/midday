@@ -68,9 +68,12 @@ Implemented foundation:
 - automatic Vault-document matching against open tax mandates
 - admin-triggered Digipoort/SBR mandate-request jobs
 - `tax` worker queue with a dry-run Digipoort processor
+- worker Digipoort WUS client for real SOAP transport, mTLS certificate
+  configuration and operation-specific XML templates
 
-Future phases should add VAT return snapshots, the production Digipoort client,
-income tax partner dossiers and customer-facing task completion screens.
+Future phases should add VAT return snapshots, income tax partner dossiers,
+customer-facing task completion screens and the official Aansluit Suite XML
+templates for each Digipoort message stream.
 
 ## Tax Client Core
 
@@ -160,10 +163,25 @@ as ad hoc admin state:
   `DIGIPOORT_DRY_RUN=true` is explicitly set
 
 The current dry-run implementation marks a requested mandate `letter_sent` and
-stores a `dry-run:*` provider reference. The integration point for the real
-SBR/Digipoort certificate/SOAP client is inside `processTaxDigipoortJob`; the
-admin and worker queue contracts should remain stable when that client replaces
-the dry-run branch.
+stores a `dry-run:*` provider reference. Outside dry-run, the worker calls the
+Digipoort WUS client from `apps/worker/src/utils/digipoort`:
+
+- mTLS is configured with either `DIGIPOORT_PFX_*` or `DIGIPOORT_CERT_*` plus
+  `DIGIPOORT_KEY_*`
+- operation-specific endpoint and SOAPAction values can be configured for
+  `request_mandate`, `activate_mandate`, `fetch_service_messages` and
+  `submit_return`
+- XML body templates are supplied through `DIGIPOORT_*_BODY_TEMPLATE_PATH`
+- templates can use escaped placeholders such as `{{subject.bsn}}`,
+  `{{mandate.taxYear}}`, `{{intermediair.rsin}}` and raw XML placeholders such
+  as `{{{bodyXml}}}` in a full envelope template
+- only sanitized provider metadata is stored in `tax_digipoort_jobs.result`
+
+The public Logius/Belastingdienst pages confirm WUS 2.0 v1.2, SOAP/WS-* and
+PKIoverheid services certificates. The exact service descriptions, current
+endpoints, body schema and message-level signing/trust-chain details must come
+from the authenticated Aansluit Suite Digipoort material. Production jobs fail
+closed when endpoint, certificate or XML template configuration is missing.
 
 ## Compatibility Checks
 

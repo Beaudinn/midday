@@ -5,6 +5,7 @@ import {
   processTaxDigipoortJobSchema,
 } from "../../schemas/tax";
 import { getDb } from "../../utils/db";
+import { executeDigipoortOperation } from "../../utils/digipoort";
 import { BaseProcessor } from "../base";
 
 export class ProcessTaxDigipoortJobProcessor extends BaseProcessor<ProcessTaxDigipoortJobPayload> {
@@ -25,6 +26,7 @@ export class ProcessTaxDigipoortJobProcessor extends BaseProcessor<ProcessTaxDig
     const result = await processTaxDigipoortJob(db, {
       teamId,
       jobId,
+      executor: executeDigipoortOperation,
     });
 
     this.logger.info("Tax Digipoort job processed", {
