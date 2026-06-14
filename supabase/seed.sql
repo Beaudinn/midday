@@ -1,0 +1,1 @@
+-- Local seed hook. The Midday schema is applied with Drizzle after Supabase starts.
