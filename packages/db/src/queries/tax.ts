@@ -500,6 +500,112 @@ export async function matchTaxMandateDocument(
   };
 }
 
+export async function confirmTaxMandateDocumentMatch(
+  db: Database,
+  params: {
+    teamId: string;
+    matchId: string;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const [match] = await tx
+      .select({
+        id: taxMandateDocumentMatches.id,
+        teamId: taxMandateDocumentMatches.teamId,
+        mandateId: taxMandateDocumentMatches.mandateId,
+        taskId: taxMandateDocumentMatches.taskId,
+        status: taxMandateDocumentMatches.status,
+        confirmedAt: taxMandateDocumentMatches.confirmedAt,
+      })
+      .from(taxMandateDocumentMatches)
+      .where(
+        and(
+          eq(taxMandateDocumentMatches.id, params.matchId),
+          eq(taxMandateDocumentMatches.teamId, params.teamId),
+        ),
+      )
+      .limit(1);
+
+    if (!match) {
+      throw new Error("Tax mandate document match not found");
+    }
+
+    if (!["matched", "needs_review", "confirmed"].includes(match.status)) {
+      throw new Error("Tax mandate document match is not ready to confirm");
+    }
+
+    const [existingMandate] = await tx
+      .select({
+        id: taxMandates.id,
+        activatedAt: taxMandates.activatedAt,
+      })
+      .from(taxMandates)
+      .where(
+        and(
+          eq(taxMandates.id, match.mandateId),
+          eq(taxMandates.teamId, params.teamId),
+        ),
+      )
+      .limit(1);
+
+    if (!existingMandate) {
+      throw new Error("Tax mandate not found for document match");
+    }
+
+    const now = new Date().toISOString();
+    const [documentMatch] = await tx
+      .update(taxMandateDocumentMatches)
+      .set({
+        status: "confirmed",
+        confirmedAt: match.confirmedAt ?? now,
+        updatedAt: now,
+      })
+      .where(eq(taxMandateDocumentMatches.id, match.id))
+      .returning();
+
+    const [mandate] = await tx
+      .update(taxMandates)
+      .set({
+        status: "active",
+        activatedAt: existingMandate.activatedAt ?? now,
+        updatedAt: now,
+      })
+      .where(eq(taxMandates.id, match.mandateId))
+      .returning();
+
+    let task: typeof taxTasks.$inferSelect | null = null;
+
+    if (match.taskId) {
+      const [updatedTask] = await tx
+        .update(taxTasks)
+        .set({
+          status: "resolved",
+          resolvedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(taxTasks.id, match.taskId),
+            eq(taxTasks.teamId, params.teamId),
+          ),
+        )
+        .returning();
+
+      task = updatedTask ?? null;
+    }
+
+    if (!documentMatch || !mandate) {
+      throw new Error("Failed to confirm tax mandate document match");
+    }
+
+    return {
+      documentMatch,
+      mandate,
+      task,
+    };
+  });
+}
+
 export async function ensureTaxClientForTeam(
   db: Database,
   params: {

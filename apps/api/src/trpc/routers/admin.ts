@@ -6,6 +6,7 @@ import {
 } from "@api/trpc/init";
 import {
   activateTaxServiceForTeam,
+  confirmTaxMandateDocumentMatch,
   ensureTaxClientForTeam,
   getAdminClientTeamById,
   getAdminClientTeams,
@@ -137,6 +138,34 @@ export const adminRouter = createTRPCRouter({
           productCode: result.product.code,
           mandateIds: result.mandates.map((mandate) => mandate.id),
           taskIds: result.tasks.map((task) => task.id),
+        },
+      });
+
+      return result;
+    }),
+
+  confirmTaxMandateDocumentMatch: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        matchId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const result = await confirmTaxMandateDocumentMatch(db, {
+        teamId: input.teamId,
+        matchId: input.matchId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_mandate_document_match.confirm",
+        resourceType: "tax_mandate_document_match",
+        resourceId: result.documentMatch.id,
+        metadata: {
+          mandateId: result.mandate.id,
+          taskId: result.task?.id ?? null,
         },
       });
 

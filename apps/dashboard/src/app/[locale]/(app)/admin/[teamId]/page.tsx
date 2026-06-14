@@ -12,6 +12,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AdminTaxClientActions } from "@/components/admin/tax-client-actions";
+import { AdminTaxMandateMatchActions } from "@/components/admin/tax-mandate-match-actions";
 import { getQueryClient, trpc } from "@/trpc/server";
 
 export const metadata: Metadata = {
@@ -415,6 +416,7 @@ export default async function AdminClientPage({ params }: PageProps) {
                 <TableHead>Confidence</TableHead>
                 <TableHead>Document date</TableHead>
                 <TableHead>Matched</TableHead>
+                <TableHead>Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -474,6 +476,13 @@ export default async function AdminClientPage({ params }: PageProps) {
                     <span className="text-sm text-muted-foreground">
                       {formatDate(match.matchedAt ?? match.createdAt)}
                     </span>
+                  </TableCell>
+                  <TableCell>
+                    <AdminTaxMandateMatchActions
+                      teamId={client.id}
+                      matchId={match.id}
+                      status={match.status}
+                    />
                   </TableCell>
                 </TableRow>
               ))}

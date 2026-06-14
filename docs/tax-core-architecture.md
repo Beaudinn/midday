@@ -137,6 +137,10 @@ queue triggers `match-tax-mandate-document`:
   is confident enough
 
 The final Digipoort/SBR activation remains a separate confirmed backend action.
+The current admin implementation supports this as a manual confirmation action:
+confirming a matched mandate document marks the document match `confirmed`, the
+mandate `active` and the related task `resolved`. A later Digipoort client can
+replace the internals of that action without changing the admin workflow.
 
 ## Compatibility Checks
 
