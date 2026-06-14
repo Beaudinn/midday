@@ -1,10 +1,11 @@
 import { encrypt } from "@midday/encryption";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import {
   documents,
   taxClientSubjects,
   taxClients,
+  taxDigipoortJobs,
   taxEntitlements,
   taxMandateDocumentMatches,
   taxMandates,
@@ -23,6 +24,8 @@ export type TaxServiceProductCode =
   | "via_retrieval"
   | "sba_monitoring";
 export type TaxMandateType = typeof taxMandates.$inferSelect.mandateType;
+export type TaxDigipoortOperation =
+  typeof taxDigipoortJobs.$inferSelect.operation;
 export type TaxMandateDocumentExtraction = {
   activationCode: string | null;
   mandateType: TaxMandateType | null;
@@ -281,6 +284,26 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
         .where(eq(taxMandateDocumentMatches.clientId, client.id)),
     ]);
 
+  const digipoortJobs = await db
+    .select({
+      id: taxDigipoortJobs.id,
+      mandateId: taxDigipoortJobs.mandateId,
+      serviceOrderId: taxDigipoortJobs.serviceOrderId,
+      operation: taxDigipoortJobs.operation,
+      status: taxDigipoortJobs.status,
+      providerReference: taxDigipoortJobs.providerReference,
+      error: taxDigipoortJobs.error,
+      attempts: taxDigipoortJobs.attempts,
+      queuedAt: taxDigipoortJobs.queuedAt,
+      startedAt: taxDigipoortJobs.startedAt,
+      completedAt: taxDigipoortJobs.completedAt,
+      createdAt: taxDigipoortJobs.createdAt,
+    })
+    .from(taxDigipoortJobs)
+    .where(eq(taxDigipoortJobs.clientId, client.id))
+    .orderBy(desc(taxDigipoortJobs.createdAt))
+    .limit(25);
+
   return {
     ...client,
     subjects,
@@ -288,6 +311,7 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     mandates,
     tasks,
     documentMatches,
+    digipoortJobs,
   };
 }
 
@@ -604,6 +628,213 @@ export async function confirmTaxMandateDocumentMatch(
       task,
     };
   });
+}
+
+function shouldDryRunDigipoort() {
+  return (
+    process.env.DIGIPOORT_DRY_RUN === "true" ||
+    (process.env.NODE_ENV !== "production" &&
+      process.env.DIGIPOORT_DRY_RUN !== "false")
+  );
+}
+
+export async function queueTaxDigipoortMandateRequest(
+  db: Database,
+  params: {
+    teamId: string;
+    mandateId: string;
+  },
+) {
+  const [mandate] = await db
+    .select({
+      id: taxMandates.id,
+      clientId: taxMandates.clientId,
+      teamId: taxMandates.teamId,
+      subjectId: taxMandates.subjectId,
+      mandateType: taxMandates.mandateType,
+      taxYear: taxMandates.taxYear,
+      status: taxMandates.status,
+    })
+    .from(taxMandates)
+    .where(
+      and(
+        eq(taxMandates.id, params.mandateId),
+        eq(taxMandates.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+
+  if (!mandate) {
+    throw new Error("Tax mandate not found");
+  }
+
+  if (["active", "rejected", "expired", "revoked"].includes(mandate.status)) {
+    throw new Error("Tax mandate cannot be requested in its current status");
+  }
+
+  const [existingJob] = await db
+    .select()
+    .from(taxDigipoortJobs)
+    .where(
+      and(
+        eq(taxDigipoortJobs.teamId, params.teamId),
+        eq(taxDigipoortJobs.mandateId, params.mandateId),
+        eq(taxDigipoortJobs.operation, "request_mandate"),
+        inArray(taxDigipoortJobs.status, ["queued", "processing"]),
+      ),
+    )
+    .orderBy(desc(taxDigipoortJobs.createdAt))
+    .limit(1);
+
+  if (existingJob) {
+    return existingJob;
+  }
+
+  const now = new Date().toISOString();
+  const [job] = await db
+    .insert(taxDigipoortJobs)
+    .values({
+      clientId: mandate.clientId,
+      teamId: mandate.teamId,
+      mandateId: mandate.id,
+      operation: "request_mandate",
+      status: "queued",
+      payload: {
+        mandateType: mandate.mandateType,
+        taxYear: mandate.taxYear,
+        subjectId: mandate.subjectId,
+      },
+      queuedAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  if (!job) {
+    throw new Error("Failed to queue Digipoort mandate request");
+  }
+
+  if (mandate.status === "draft") {
+    await db
+      .update(taxMandates)
+      .set({
+        status: "requested",
+        requestedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(taxMandates.id, mandate.id));
+  }
+
+  return job;
+}
+
+export async function processTaxDigipoortJob(
+  db: Database,
+  params: {
+    teamId: string;
+    jobId: string;
+  },
+) {
+  const [job] = await db
+    .select()
+    .from(taxDigipoortJobs)
+    .where(
+      and(
+        eq(taxDigipoortJobs.id, params.jobId),
+        eq(taxDigipoortJobs.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+
+  if (!job) {
+    throw new Error("Digipoort job not found");
+  }
+
+  if (job.status === "completed") {
+    return job;
+  }
+
+  const startedAt = new Date().toISOString();
+
+  await db
+    .update(taxDigipoortJobs)
+    .set({
+      status: "processing",
+      attempts: job.attempts + 1,
+      startedAt,
+      completedAt: null,
+      updatedAt: startedAt,
+      error: null,
+    })
+    .where(eq(taxDigipoortJobs.id, job.id));
+
+  try {
+    if (job.operation !== "request_mandate") {
+      throw new Error(`Digipoort operation not implemented: ${job.operation}`);
+    }
+
+    if (!job.mandateId) {
+      throw new Error("Digipoort mandate request job has no mandate id");
+    }
+
+    if (!shouldDryRunDigipoort()) {
+      throw new Error(
+        "Digipoort client is not configured. Set DIGIPOORT_DRY_RUN=true for development.",
+      );
+    }
+
+    const completedAt = new Date().toISOString();
+    const providerReference = `dry-run:${job.operation}:${job.id}`;
+    const result = {
+      dryRun: true,
+      accepted: true,
+      providerReference,
+      message:
+        "Dry-run Digipoort mandate request accepted. Replace with SBR/Digipoort client.",
+    };
+
+    await db
+      .update(taxMandates)
+      .set({
+        status: "letter_sent",
+        externalReference: providerReference,
+        updatedAt: completedAt,
+      })
+      .where(eq(taxMandates.id, job.mandateId));
+
+    const [completedJob] = await db
+      .update(taxDigipoortJobs)
+      .set({
+        status: "completed",
+        providerReference,
+        result,
+        completedAt,
+        updatedAt: completedAt,
+      })
+      .where(eq(taxDigipoortJobs.id, job.id))
+      .returning();
+
+    if (!completedJob) {
+      throw new Error("Failed to complete Digipoort job");
+    }
+
+    return completedJob;
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    const message =
+      error instanceof Error ? error.message : "Unknown Digipoort error";
+
+    await db
+      .update(taxDigipoortJobs)
+      .set({
+        status: "failed",
+        error: message,
+        completedAt: failedAt,
+        updatedAt: failedAt,
+      })
+      .where(eq(taxDigipoortJobs.id, job.id));
+
+    throw error;
+  }
 }
 
 export async function ensureTaxClientForTeam(

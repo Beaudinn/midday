@@ -12,6 +12,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AdminTaxClientActions } from "@/components/admin/tax-client-actions";
+import { AdminTaxMandateDigipoortActions } from "@/components/admin/tax-mandate-digipoort-actions";
 import { AdminTaxMandateMatchActions } from "@/components/admin/tax-mandate-match-actions";
 import { getQueryClient, trpc } from "@/trpc/server";
 
@@ -46,16 +47,28 @@ function statusTone(status?: string | null) {
     return "text-muted-foreground";
   }
 
-  if (["active", "matched", "answered", "confirmed"].includes(status)) {
+  if (
+    ["active", "matched", "answered", "confirmed", "completed"].includes(status)
+  ) {
     return "text-emerald-600 dark:text-emerald-400";
   }
 
   if (
-    ["needs_review", "activation_required", "requested", "open"].includes(
-      status,
-    )
+    [
+      "needs_review",
+      "activation_required",
+      "requested",
+      "letter_sent",
+      "open",
+      "queued",
+      "processing",
+    ].includes(status)
   ) {
     return "text-amber-600 dark:text-amber-400";
+  }
+
+  if (["failed", "rejected", "expired", "revoked"].includes(status)) {
+    return "text-destructive";
   }
 
   return "text-muted-foreground";
@@ -293,6 +306,7 @@ export default async function AdminClientPage({ params }: PageProps) {
                     <TableHead>Tax year</TableHead>
                     <TableHead>Requested</TableHead>
                     <TableHead>Activated</TableHead>
+                    <TableHead>Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -323,6 +337,13 @@ export default async function AdminClientPage({ params }: PageProps) {
                           {formatDate(mandate.activatedAt)}
                         </span>
                       </TableCell>
+                      <TableCell>
+                        <AdminTaxMandateDigipoortActions
+                          teamId={client.id}
+                          mandateId={mandate.id}
+                          status={mandate.status}
+                        />
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -330,6 +351,72 @@ export default async function AdminClientPage({ params }: PageProps) {
             ) : (
               <div className="p-4">
                 <EmptyState>No mandates requested.</EmptyState>
+              </div>
+            )}
+          </div>
+
+          <div className="border border-border">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <h2 className="text-sm font-medium">Digipoort jobs</h2>
+              <span className="text-xs text-muted-foreground">
+                {taxClient?.digipoortJobs.length ?? 0} recent
+              </span>
+            </div>
+            {taxClient?.digipoortJobs.length ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Operation</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Mandate</TableHead>
+                    <TableHead>Reference</TableHead>
+                    <TableHead>Attempts</TableHead>
+                    <TableHead>Completed</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {taxClient.digipoortJobs.map((job) => (
+                    <TableRow key={job.id}>
+                      <TableCell>
+                        <span className="text-sm">{label(job.operation)}</span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <span className={`text-sm ${statusTone(job.status)}`}>
+                            {label(job.status)}
+                          </span>
+                          {job.error && (
+                            <span className="max-w-xs text-xs text-destructive">
+                              {job.error}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {job.mandateId?.slice(0, 8) ?? "-"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="max-w-xs truncate font-mono text-xs text-muted-foreground">
+                          {job.providerReference ?? "-"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm">{job.attempts}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-muted-foreground">
+                          {formatDate(job.completedAt ?? job.startedAt)}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="p-4">
+                <EmptyState>No Digipoort jobs queued yet.</EmptyState>
               </div>
             )}
           </div>

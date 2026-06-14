@@ -12,8 +12,10 @@ import {
   getAdminClientTeams,
   getPlatformStaffByUserId,
   getTaxServiceProducts,
+  queueTaxDigipoortMandateRequest,
   recordTaxAuditEvent,
 } from "@midday/db/queries";
+import { triggerJob } from "@midday/job-client";
 import { z } from "zod";
 
 const taxClientKindSchema = z.enum([
@@ -170,5 +172,51 @@ export const adminRouter = createTRPCRouter({
       });
 
       return result;
+    }),
+
+  requestTaxMandateViaDigipoort: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        mandateId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const digipoortJob = await queueTaxDigipoortMandateRequest(db, {
+        teamId: input.teamId,
+        mandateId: input.mandateId,
+      });
+
+      const job = await triggerJob(
+        "process-tax-digipoort-job",
+        {
+          teamId: input.teamId,
+          jobId: digipoortJob.id,
+          operation: digipoortJob.operation,
+        },
+        "tax",
+        {
+          jobId: `tax-digipoort_${input.teamId}_${digipoortJob.id}`,
+          attempts: 3,
+        },
+      );
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_mandate.digipoort_request",
+        resourceType: "tax_mandate",
+        resourceId: input.mandateId,
+        metadata: {
+          digipoortJobId: digipoortJob.id,
+          workerJobId: job.id,
+          operation: digipoortJob.operation,
+        },
+      });
+
+      return {
+        digipoortJob,
+        job,
+      };
     }),
 });

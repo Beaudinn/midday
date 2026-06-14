@@ -284,6 +284,19 @@ export const taxMandateDocumentMatchStatusEnum = pgEnum(
   "tax_mandate_document_match_status",
   ["pending", "matched", "needs_review", "failed", "confirmed", "ignored"],
 );
+export const taxDigipoortOperationEnum = pgEnum("tax_digipoort_operation", [
+  "request_mandate",
+  "activate_mandate",
+  "fetch_service_messages",
+  "submit_return",
+]);
+export const taxDigipoortJobStatusEnum = pgEnum("tax_digipoort_job_status", [
+  "queued",
+  "processing",
+  "completed",
+  "failed",
+  "cancelled",
+]);
 export const trackerStatusEnum = pgEnum("trackerStatus", [
   "in_progress",
   "completed",
@@ -4603,6 +4616,69 @@ export const taxMandateDocumentMatches = pgTable(
       columns: [table.uploadedByUserId],
       foreignColumns: [users.id],
       name: "tax_mandate_document_matches_uploaded_by_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxDigipoortJobs = pgTable(
+  "tax_digipoort_jobs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    mandateId: uuid("mandate_id"),
+    serviceOrderId: uuid("service_order_id"),
+    operation: taxDigipoortOperationEnum().notNull(),
+    status: taxDigipoortJobStatusEnum().default("queued").notNull(),
+    payload: jsonb().default(sql`'{}'::jsonb`).notNull(),
+    result: jsonb().default(sql`'{}'::jsonb`).notNull(),
+    providerReference: text("provider_reference"),
+    error: text(),
+    attempts: integer().default(0).notNull(),
+    queuedAt: timestamp("queued_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    startedAt: timestamp("started_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("tax_digipoort_jobs_team_status_idx").on(table.teamId, table.status),
+    index("tax_digipoort_jobs_client_created_idx").on(
+      table.clientId,
+      table.createdAt,
+    ),
+    index("tax_digipoort_jobs_mandate_idx").on(table.mandateId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_digipoort_jobs_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_digipoort_jobs_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.mandateId],
+      foreignColumns: [taxMandates.id],
+      name: "tax_digipoort_jobs_mandate_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.serviceOrderId],
+      foreignColumns: [taxServiceOrders.id],
+      name: "tax_digipoort_jobs_service_order_id_fkey",
     }).onDelete("set null"),
   ],
 );

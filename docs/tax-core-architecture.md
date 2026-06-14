@@ -62,12 +62,15 @@ Implemented foundation:
 - `tax_mandates`
 - `tax_tasks`
 - `tax_mandate_document_matches`
+- `tax_digipoort_jobs`
 - admin activation for tax clients and manual service entitlements
 - automatic mandate/task creation from service `required_mandates`
 - automatic Vault-document matching against open tax mandates
+- admin-triggered Digipoort/SBR mandate-request jobs
+- `tax` worker queue with a dry-run Digipoort processor
 
-Future phases should add VAT return snapshots, Digipoort queues, income tax
-partner dossiers and customer-facing task completion screens.
+Future phases should add VAT return snapshots, the production Digipoort client,
+income tax partner dossiers and customer-facing task completion screens.
 
 ## Tax Client Core
 
@@ -141,6 +144,26 @@ The current admin implementation supports this as a manual confirmation action:
 confirming a matched mandate document marks the document match `confirmed`, the
 mandate `active` and the related task `resolved`. A later Digipoort client can
 replace the internals of that action without changing the admin workflow.
+
+## Digipoort/SBR Jobs
+
+Digipoort/SBR work is modeled as durable tax work in `tax_digipoort_jobs`, not
+as ad hoc admin state:
+
+- admin action queues a `request_mandate` job for a specific `tax_mandates` row
+- the API records the tax job and enqueues `process-tax-digipoort-job` on the
+  `tax` BullMQ queue
+- the worker marks the job `processing`, stores attempts and completes or fails
+  it with provider result metadata
+- development defaults to dry-run unless `DIGIPOORT_DRY_RUN=false`
+- production does not fake Digipoort processing unless
+  `DIGIPOORT_DRY_RUN=true` is explicitly set
+
+The current dry-run implementation marks a requested mandate `letter_sent` and
+stores a `dry-run:*` provider reference. The integration point for the real
+SBR/Digipoort certificate/SOAP client is inside `processTaxDigipoortJob`; the
+admin and worker queue contracts should remain stable when that client replaces
+the dry-run branch.
 
 ## Compatibility Checks
 

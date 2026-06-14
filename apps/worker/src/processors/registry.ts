@@ -13,6 +13,7 @@ import { institutionsProcessors } from "./institutions";
 import { invoiceProcessors } from "./invoices";
 import { notificationProcessors } from "./notifications";
 import { ratesProcessors } from "./rates";
+import { taxProcessors } from "./tax";
 import { teamProcessors } from "./teams";
 import { transactionProcessors } from "./transactions";
 
@@ -67,6 +68,11 @@ for (const [jobName, processor] of Object.entries(customerProcessors)) {
 
 // Register team processors
 for (const [jobName, processor] of Object.entries(teamProcessors)) {
+  processors.set(jobName, processor);
+}
+
+// Register tax processors
+for (const [jobName, processor] of Object.entries(taxProcessors)) {
   processors.set(jobName, processor);
 }
 
