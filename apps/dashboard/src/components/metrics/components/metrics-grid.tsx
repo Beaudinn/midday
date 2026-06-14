@@ -76,9 +76,7 @@ export function MetricsGrid({
     },
   });
   const keyboardSensor = useSensor(KeyboardSensor);
-  const activeSensors = useSensors(pointerSensor, keyboardSensor);
-  const noSensors = useSensors();
-  const sensors = isEditing ? activeSensors : noSensors;
+  const sensors = useSensors(pointerSensor, keyboardSensor);
 
   const chartIds = layout.map((item) => item.id);
 
