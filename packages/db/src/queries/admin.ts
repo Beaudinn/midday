@@ -3,6 +3,7 @@ import type { Database } from "../client";
 import { platformStaff, taxAuditEvents, teams, usersOnTeam } from "../schema";
 import {
   getActiveTaxEntitlementsByTeamIds,
+  getTaxClientByTeamId,
   getTaxMandateSummariesByTeamIds,
 } from "./tax";
 
@@ -146,6 +147,50 @@ export async function getAdminClientTeams(
         : null,
     };
   });
+}
+
+export async function getAdminClientTeamById(db: Database, teamId: string) {
+  const [team] = await db
+    .select({
+      id: teams.id,
+      name: teams.name,
+      email: teams.email,
+      createdAt: teams.createdAt,
+      plan: teams.plan,
+      subscriptionStatus: teams.subscriptionStatus,
+      countryCode: teams.countryCode,
+      baseCurrency: teams.baseCurrency,
+      workspaceType: teams.workspaceType,
+      companyType: teams.companyType,
+      memberCount: sql<number>`cast(count(${usersOnTeam.userId}) as int)`,
+    })
+    .from(teams)
+    .leftJoin(usersOnTeam, eq(usersOnTeam.teamId, teams.id))
+    .where(eq(teams.id, teamId))
+    .groupBy(
+      teams.id,
+      teams.name,
+      teams.email,
+      teams.createdAt,
+      teams.plan,
+      teams.subscriptionStatus,
+      teams.countryCode,
+      teams.baseCurrency,
+      teams.workspaceType,
+      teams.companyType,
+    )
+    .limit(1);
+
+  if (!team) {
+    return null;
+  }
+
+  const taxClient = await getTaxClientByTeamId(db, teamId);
+
+  return {
+    ...team,
+    taxClient,
+  };
 }
 
 export async function recordTaxAuditEvent(

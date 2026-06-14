@@ -120,7 +120,12 @@ export default async function AdminPage() {
                   <TableCell>
                     <div className="flex flex-col">
                       <span className="font-medium">
-                        {client.name || "Untitled team"}
+                        <Link
+                          href={`/admin/${client.id}`}
+                          className="hover:underline"
+                        >
+                          {client.name || "Untitled team"}
+                        </Link>
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {client.email || client.id}

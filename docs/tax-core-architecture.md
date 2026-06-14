@@ -50,6 +50,8 @@ Implemented foundation:
 - `adminProcedure`
 - `admin.me` and `admin.clients`
 - `/admin` client-team list
+- `/admin/[teamId]` client detail view with tax subjects, services, mandates,
+  tasks and Vault mandate-document matches
 - onboarding workspace type selection
 - `tax_clients`
 - `tax_subjects`

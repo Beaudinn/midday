@@ -7,6 +7,7 @@ import {
 import {
   activateTaxServiceForTeam,
   ensureTaxClientForTeam,
+  getAdminClientTeamById,
   getAdminClientTeams,
   getPlatformStaffByUserId,
   getTaxServiceProducts,
@@ -59,6 +60,22 @@ export const adminRouter = createTRPCRouter({
       });
 
       return clients;
+    }),
+
+  client: adminProcedure
+    .input(z.object({ teamId: z.string().uuid() }))
+    .query(async ({ ctx: { db, platformStaff }, input }) => {
+      const client = await getAdminClientTeamById(db, input.teamId);
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.client.view",
+        resourceType: "team",
+        resourceId: input.teamId,
+      });
+
+      return client;
     }),
 
   taxServiceProducts: adminProcedure.query(async ({ ctx: { db } }) => {
