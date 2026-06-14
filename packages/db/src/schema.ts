@@ -1660,7 +1660,7 @@ export const teams = pgTable(
       .notNull(),
     name: text(),
     logoUrl: text("logo_url"),
-    inboxId: text("inbox_id").default("generate_inbox(10)"),
+    inboxId: text("inbox_id").default(sql`generate_inbox(10)`),
     email: text(),
     inboxEmail: text("inbox_email"),
     inboxForwarding: boolean("inbox_forwarding").default(true),
