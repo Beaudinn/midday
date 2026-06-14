@@ -55,6 +55,7 @@ export const getTeamById = async (db: Database, id: string) => {
       baseCurrency: teams.baseCurrency,
       countryCode: teams.countryCode,
       fiscalYearStartMonth: teams.fiscalYearStartMonth,
+      workspaceType: teams.workspaceType,
       exportSettings: teams.exportSettings,
       stripeAccountId: teams.stripeAccountId,
       stripeConnectStatus: teams.stripeConnectStatus,
@@ -131,6 +132,7 @@ export const updateTeamById = async (
       baseCurrency: teams.baseCurrency,
       countryCode: teams.countryCode,
       fiscalYearStartMonth: teams.fiscalYearStartMonth,
+      workspaceType: teams.workspaceType,
     });
 
   return result;
@@ -145,6 +147,7 @@ type CreateTeamParams = {
   fiscalYearStartMonth?: number | null;
   logoUrl?: string;
   companyType?: string;
+  workspaceType?: "business" | "personal" | "household";
   heardAbout?: string;
   switchTeam?: boolean;
 };
@@ -256,6 +259,7 @@ export const createTeam = async (db: Database, params: CreateTeamParams) => {
           logoUrl: params.logoUrl,
           email: params.email,
           companyType: params.companyType,
+          workspaceType: params.workspaceType ?? "business",
           heardAbout: params.heardAbout,
         })
         .returning({ id: teams.id });

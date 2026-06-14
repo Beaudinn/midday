@@ -28,6 +28,7 @@ export const getUserById = async (db: Database, id: string) => {
         countryCode: teams.countryCode,
         canceledAt: teams.canceledAt,
         baseCurrency: teams.baseCurrency,
+        workspaceType: teams.workspaceType,
       },
     })
     .from(users)

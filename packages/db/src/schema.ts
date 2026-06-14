@@ -195,6 +195,20 @@ export const reportTypesEnum = pgEnum("reportTypes", [
 ]);
 
 export const teamRolesEnum = pgEnum("teamRoles", ["owner", "member"]);
+export const workspaceTypeEnum = pgEnum("workspace_type", [
+  "business",
+  "personal",
+  "household",
+]);
+export const platformStaffRoleEnum = pgEnum("platform_staff_role", [
+  "platform_owner",
+  "admin",
+  "reviewer",
+  "submitter",
+  "support",
+  "billing",
+  "auditor",
+]);
 export const trackerStatusEnum = pgEnum("trackerStatus", [
   "in_progress",
   "completed",
@@ -1679,6 +1693,9 @@ export const teams = pgTable(
     stripeAccountId: text("stripe_account_id"),
     stripeConnectStatus: text("stripe_connect_status"),
     companyType: text("company_type"),
+    workspaceType: workspaceTypeEnum("workspace_type")
+      .default("business")
+      .notNull(),
     heardAbout: text("heard_about"),
   },
   (table) => [
@@ -3971,6 +3988,74 @@ export const accountingSyncRecords = pgTable(
       for: "update",
       to: ["public"],
     }),
+  ],
+);
+
+export const platformStaff = pgTable(
+  "platform_staff",
+  {
+    userId: uuid("user_id").primaryKey().notNull(),
+    role: platformStaffRoleEnum().notNull(),
+    active: boolean().default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("platform_staff_active_idx").on(table.active),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+      name: "platform_staff_user_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const taxAuditEvents = pgTable(
+  "tax_audit_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    teamId: uuid("team_id"),
+    actorUserId: uuid("actor_user_id"),
+    actorStaffUserId: uuid("actor_staff_user_id"),
+    action: text().notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id"),
+    metadata: jsonb().default(sql`'{}'::jsonb`).notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+  },
+  (table) => [
+    index("tax_audit_events_team_created_at_idx").on(
+      table.teamId,
+      table.createdAt,
+    ),
+    index("tax_audit_events_actor_staff_idx").on(table.actorStaffUserId),
+    index("tax_audit_events_resource_idx").on(
+      table.resourceType,
+      table.resourceId,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_audit_events_team_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.actorUserId],
+      foreignColumns: [users.id],
+      name: "tax_audit_events_actor_user_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.actorStaffUserId],
+      foreignColumns: [users.id],
+      name: "tax_audit_events_actor_staff_user_id_fkey",
+    }).onDelete("set null"),
   ],
 );
 

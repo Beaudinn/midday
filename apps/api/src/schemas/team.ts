@@ -1,5 +1,12 @@
 import { z } from "@hono/zod-openapi";
 
+export const workspaceTypeSchema = z
+  .enum(["business", "personal", "household"])
+  .openapi({
+    description: "Workspace context for the team",
+    example: "business",
+  });
+
 export const teamResponseSchema = z.object({
   id: z.string().uuid().openapi({
     description: "Unique identifier of the team",
@@ -42,6 +49,7 @@ export const teamResponseSchema = z.object({
         "Month when the fiscal year starts (1-12). Null for trailing 12 months.",
       example: 1,
     }),
+  workspaceType: workspaceTypeSchema.optional(),
 });
 
 export const teamsResponseSchema = z.object({
@@ -161,6 +169,7 @@ export const updateTeamByIdSchema = z.object({
       description: "Type of company or team",
       example: "solo_founder",
     }),
+  workspaceType: workspaceTypeSchema.optional(),
   heardAbout: z
     .enum([
       "twitter",
@@ -209,6 +218,7 @@ export const createTeamSchema = z.object({
     description: "URL to the team's logo image",
     example: "https://cdn.midday.ai/logos/acme-corp.png",
   }),
+  workspaceType: workspaceTypeSchema.optional().default("business"),
   companyType: z
     .enum([
       "freelancer",
@@ -222,6 +232,7 @@ export const createTeamSchema = z.object({
       "accountant",
       "exploring",
     ])
+    .optional()
     .openapi({
       description: "Type of company or team",
       example: "solo_founder",
@@ -237,6 +248,7 @@ export const createTeamSchema = z.object({
       "github",
       "other",
     ])
+    .optional()
     .openapi({
       description: "How the user heard about the product",
       example: "twitter",

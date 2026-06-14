@@ -27,40 +27,52 @@ import { SelectHeardAbout } from "@/components/select-heard-about";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { useTRPC } from "@/trpc/client";
 
-const formSchema = z.object({
-  name: z.string().min(2, "Company name must be at least 2 characters."),
-  countryCode: z.string(),
-  baseCurrency: z.string(),
-  fiscalYearStartMonth: z.number().int().min(1).max(12).nullable().optional(),
-  companyType: z.enum(
-    [
-      "freelancer",
-      "solo_founder",
-      "small_team",
-      "startup",
-      "agency",
-      "ecommerce",
-      "creator",
-      "non_profit",
-      "accountant",
-      "exploring",
-    ],
-    { required_error: "Please select a company type." },
-  ),
-  heardAbout: z.enum(
-    [
-      "twitter",
-      "youtube",
-      "friend",
-      "google",
-      "blog",
-      "podcast",
-      "github",
-      "other",
-    ],
-    { required_error: "Please select an option." },
-  ),
-});
+const formSchema = z
+  .object({
+    workspaceType: z
+      .enum(["business", "personal", "household"])
+      .default("business"),
+    name: z.string().min(2, "Name must be at least 2 characters."),
+    countryCode: z.string(),
+    baseCurrency: z.string(),
+    fiscalYearStartMonth: z.number().int().min(1).max(12).nullable().optional(),
+    companyType: z
+      .enum([
+        "freelancer",
+        "solo_founder",
+        "small_team",
+        "startup",
+        "agency",
+        "ecommerce",
+        "creator",
+        "non_profit",
+        "accountant",
+        "exploring",
+      ])
+      .optional(),
+    heardAbout: z.enum(
+      [
+        "twitter",
+        "youtube",
+        "friend",
+        "google",
+        "blog",
+        "podcast",
+        "github",
+        "other",
+      ],
+      { required_error: "Please select an option." },
+    ),
+  })
+  .superRefine((values, ctx) => {
+    if (values.workspaceType === "business" && !values.companyType) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["companyType"],
+        message: "Please select a company type.",
+      });
+    }
+  });
 
 type FormValues = z.infer<typeof formSchema>;
 
@@ -95,7 +107,8 @@ export function CreateTeamStep({
           channel: LogEvents.OnboardingTeamCreated.channel,
           countryCode: form.getValues("countryCode"),
           currency: form.getValues("baseCurrency"),
-          companyType: form.getValues("companyType"),
+          companyType: form.getValues("companyType") ?? null,
+          workspaceType: form.getValues("workspaceType"),
           heardAbout: form.getValues("heardAbout"),
         });
         await queryClient.invalidateQueries();
@@ -120,6 +133,7 @@ export function CreateTeamStep({
 
   const form = useZodForm(formSchema, {
     defaultValues: {
+      workspaceType: "business",
       name: "",
       baseCurrency: currency,
       countryCode: countryCode ?? "",
@@ -128,6 +142,14 @@ export function CreateTeamStep({
   });
 
   const selectedCountryCode = form.watch("countryCode");
+  const selectedWorkspaceType = form.watch("workspaceType");
+
+  useEffect(() => {
+    if (selectedWorkspaceType !== "business") {
+      form.setValue("companyType", undefined);
+    }
+  }, [selectedWorkspaceType, form]);
+
   useEffect(() => {
     const defaultFiscalYear =
       getDefaultFiscalYearStartMonth(selectedCountryCode);
@@ -145,6 +167,29 @@ export function CreateTeamStep({
   }, [isLoading, onLoadingChange]);
 
   const isFormLocked = isLoading || isSubmittedRef.current;
+  const copy = {
+    business: {
+      title: "Business details",
+      description:
+        "Add company details so amounts, currency, tax, and reporting periods line up correctly across insights, invoices and exports.",
+      nameLabel: "Company name",
+      namePlaceholder: "Ex: Acme Marketing or Acme Co",
+    },
+    personal: {
+      title: "Personal details",
+      description:
+        "Set up a personal workspace for income tax without requiring company, invoice or bank setup.",
+      nameLabel: "Full name",
+      namePlaceholder: "Ex: Robin de Vries",
+    },
+    household: {
+      title: "Household details",
+      description:
+        "Set up a shared workspace for income tax where partner and household documents can live together.",
+      nameLabel: "Household name",
+      namePlaceholder: "Ex: De Vries household",
+    },
+  }[selectedWorkspaceType];
 
   async function onSubmit(values: FormValues) {
     if (isFormLocked) return;
@@ -158,6 +203,7 @@ export function CreateTeamStep({
         baseCurrency: values.baseCurrency,
         countryCode: values.countryCode,
         fiscalYearStartMonth: values.fiscalYearStartMonth,
+        workspaceType: values.workspaceType,
         companyType: values.companyType,
         heardAbout: values.heardAbout,
         switchTeam: true,
@@ -176,7 +222,7 @@ export function CreateTeamStep({
         transition={{ duration: 0.4, delay: 0.1 }}
         className="text-lg lg:text-xl font-serif"
       >
-        Business details
+        {copy.title}
       </motion.h1>
 
       <motion.p
@@ -185,8 +231,7 @@ export function CreateTeamStep({
         transition={{ duration: 0.4, delay: 0.2 }}
         className="text-sm text-muted-foreground leading-relaxed"
       >
-        Add company details so amounts, currency, tax, and reporting periods
-        line up correctly across insights, invoices and exports.
+        {copy.description}
       </motion.p>
 
       <motion.div
@@ -202,16 +247,55 @@ export function CreateTeamStep({
           >
             <FormField
               control={form.control}
+              name="workspaceType"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-xs text-primary font-normal">
+                    Workspace type
+                  </FormLabel>
+                  <FormControl>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        ["business", "Business"],
+                        ["personal", "Personal"],
+                        ["household", "Household"],
+                      ].map(([value, label]) => {
+                        const selected = field.value === value;
+
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            className={
+                              selected
+                                ? "h-9 border border-primary bg-primary text-primary-foreground text-xs"
+                                : "h-9 border border-border bg-secondary text-muted-foreground text-xs hover:text-primary"
+                            }
+                            onClick={() => field.onChange(value)}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
               name="name"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-xs text-primary font-normal">
-                    Company name
+                    {copy.nameLabel}
                   </FormLabel>
                   <FormControl>
                     <Input
                       autoFocus
-                      placeholder="Ex: Acme Marketing or Acme Co"
+                      placeholder={copy.namePlaceholder}
                       autoComplete="off"
                       autoCapitalize="none"
                       autoCorrect="off"
@@ -300,26 +384,34 @@ export function CreateTeamStep({
               </FormDescription>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 border-t border-border pt-4">
-              <FormField
-                control={form.control}
-                name="companyType"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs text-primary font-normal">
-                      What best describes you?
-                    </FormLabel>
-                    <FormControl>
-                      <SelectCompanyType
-                        value={field.value}
-                        onChange={field.onChange}
-                        className="bg-secondary border-border text-foreground"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            <div
+              className={
+                selectedWorkspaceType === "business"
+                  ? "grid grid-cols-2 gap-3 border-t border-border pt-4"
+                  : "grid grid-cols-1 gap-3 border-t border-border pt-4"
+              }
+            >
+              {selectedWorkspaceType === "business" && (
+                <FormField
+                  control={form.control}
+                  name="companyType"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-xs text-primary font-normal">
+                        What best describes you?
+                      </FormLabel>
+                      <FormControl>
+                        <SelectCompanyType
+                          value={field.value}
+                          onChange={field.onChange}
+                          className="bg-secondary border-border text-foreground"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <FormField
                 control={form.control}

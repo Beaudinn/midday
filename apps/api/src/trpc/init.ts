@@ -6,6 +6,7 @@ import { getRequestTrace } from "@api/utils/request-trace";
 import { safeCompare } from "@api/utils/safe-compare";
 import type { Database } from "@midday/db/client";
 import { db } from "@midday/db/client";
+import { getPlatformStaffByUserId } from "@midday/db/queries";
 import { createLoggerWithContext } from "@midday/logger";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { initTRPC, TRPCError } from "@trpc/server";
@@ -16,6 +17,13 @@ import { withTeamPermission } from "./middleware/team-permission";
 
 const DEBUG_PERF = process.env.DEBUG_PERF === "true";
 const perfLogger = createLoggerWithContext("perf:trpc");
+
+export function isTaxAdminEnabled() {
+  return (
+    process.env.MIDDAY_TAX_ADMIN_ENABLED === "true" ||
+    process.env.NODE_ENV === "development"
+  );
+}
 
 type TRPCContext = {
   session: Session | null;
@@ -136,6 +144,41 @@ export const protectedProcedure = t.procedure
       ctx: {
         teamId,
         session,
+      },
+    });
+  });
+
+export const adminProcedure = t.procedure
+  .use(withTimingMiddleware)
+  .use(withPrimaryDbMiddleware)
+  .use(async (opts) => {
+    const { db, session } = opts.ctx;
+
+    if (!session) {
+      throw new TRPCError({ code: "UNAUTHORIZED" });
+    }
+
+    if (!isTaxAdminEnabled()) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Tax admin is not enabled.",
+      });
+    }
+
+    const platformStaff = await getPlatformStaffByUserId(db, session.user.id);
+
+    if (!platformStaff) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No platform staff access.",
+      });
+    }
+
+    return opts.next({
+      ctx: {
+        ...opts.ctx,
+        session,
+        platformStaff,
       },
     });
   });

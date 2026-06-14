@@ -1,5 +1,6 @@
 export * from "./accounting-sync";
 export * from "./activities";
+export * from "./admin";
 export * from "./api-keys";
 export * from "./apps";
 export * from "./bank-accounts";
