@@ -474,6 +474,7 @@ export class ProcessDocumentProcessor extends BaseProcessor<ProcessDocumentPaylo
         {
           content: sample,
           fileName,
+          mimetype: processedMimetype,
           teamId,
         },
         "documents",

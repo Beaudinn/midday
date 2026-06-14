@@ -280,6 +280,10 @@ export const taxTaskStatusEnum = pgEnum("tax_task_status", [
   "resolved",
   "cancelled",
 ]);
+export const taxMandateDocumentMatchStatusEnum = pgEnum(
+  "tax_mandate_document_match_status",
+  ["pending", "matched", "needs_review", "failed", "confirmed", "ignored"],
+);
 export const trackerStatusEnum = pgEnum("trackerStatus", [
   "in_progress",
   "completed",
@@ -4517,6 +4521,88 @@ export const taxTasks = pgTable(
       columns: [table.assignedToStaffUserId],
       foreignColumns: [users.id],
       name: "tax_tasks_assigned_to_staff_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxMandateDocumentMatches = pgTable(
+  "tax_mandate_document_matches",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    mandateId: uuid("mandate_id").notNull(),
+    taskId: uuid("task_id"),
+    documentId: uuid("document_id"),
+    uploadedByUserId: uuid("uploaded_by_user_id"),
+    filePathTokens: text("file_path_tokens").array().notNull(),
+    mimetype: text().notNull(),
+    size: integer(),
+    status: taxMandateDocumentMatchStatusEnum().default("pending").notNull(),
+    extractedCodeEncrypted: text("extracted_code_encrypted"),
+    extractedCodePreview: text("extracted_code_preview"),
+    extractedMandateType: taxMandateTypeEnum("extracted_mandate_type"),
+    extractedTaxYear: integer("extracted_tax_year"),
+    extractionConfidence: integer("extraction_confidence"),
+    extractionReason: text("extraction_reason"),
+    rawExtraction: jsonb("raw_extraction").default(sql`'{}'::jsonb`).notNull(),
+    matchedAt: timestamp("matched_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    confirmedAt: timestamp("confirmed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_mandate_document_matches_file_mandate_key").on(
+      table.teamId,
+      table.mandateId,
+      table.filePathTokens,
+    ),
+    index("tax_mandate_document_matches_team_status_idx").on(
+      table.teamId,
+      table.status,
+    ),
+    index("tax_mandate_document_matches_mandate_idx").on(table.mandateId),
+    index("tax_mandate_document_matches_task_idx").on(table.taskId),
+    index("tax_mandate_document_matches_document_idx").on(table.documentId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_mandate_document_matches_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_mandate_document_matches_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.mandateId],
+      foreignColumns: [taxMandates.id],
+      name: "tax_mandate_document_matches_mandate_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.taskId],
+      foreignColumns: [taxTasks.id],
+      name: "tax_mandate_document_matches_task_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.documentId],
+      foreignColumns: [documents.id],
+      name: "tax_mandate_document_matches_document_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.uploadedByUserId],
+      foreignColumns: [users.id],
+      name: "tax_mandate_document_matches_uploaded_by_user_id_fkey",
     }).onDelete("set null"),
   ],
 );

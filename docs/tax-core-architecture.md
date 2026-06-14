@@ -59,8 +59,10 @@ Implemented foundation:
 - `tax_service_orders`
 - `tax_mandates`
 - `tax_tasks`
+- `tax_mandate_document_matches`
 - admin activation for tax clients and manual service entitlements
 - automatic mandate/task creation from service `required_mandates`
+- automatic Vault-document matching against open tax mandates
 
 Future phases should add VAT return snapshots, Digipoort queues, income tax
 partner dossiers and customer-facing task completion screens.
@@ -104,6 +106,35 @@ create or reuse `tax_mandates` for the primary/business subject:
 Each requested mandate creates an open `tax_tasks` row for the activation-code
 or authorization step. This lets Midday request authorizations before a customer
 orders a specific return, while still supporting orders and subscriptions later.
+
+## Vault, OCR And Mandate Matching
+
+Midday already treats Vault as the document source of truth:
+
+- `documents.date` stores the extracted document date and is used by Vault date
+  filtering.
+- `documents.content`, `body` and FTS columns support document search.
+- document tag/category embeddings already use pgvector, but Midday does not
+  currently maintain a generic chunked vector store for all document content.
+
+Tax should therefore not duplicate document dates or create a parallel file
+store. After normal Vault upload and document classification, the documents
+queue triggers `match-tax-mandate-document`:
+
+- skip immediately when the team has no open `tax_mandates`
+- OCR/extract the possible activation code from the uploaded file
+- compare mandate type, tax year and confidence against open mandates
+- store the match in `tax_mandate_document_matches`
+- link back to `documents.id`, so `documents.date` remains the briefdatum
+- store `extracted_tax_year` only for fiscal/aangiftejaar when the letter
+  explicitly refers to a year that may differ from the document date
+- do not auto-activate when multiple open mandates match equally, or when the
+  same mandate type has multiple open fiscal years and the letter does not
+  explicitly identify the fiscal year
+- mark the task `answered` and the mandate `activation_required` when the match
+  is confident enough
+
+The final Digipoort/SBR activation remains a separate confirmed backend action.
 
 ## Compatibility Checks
 

@@ -1,9 +1,12 @@
+import { encrypt } from "@midday/encryption";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import {
+  documents,
   taxClientSubjects,
   taxClients,
   taxEntitlements,
+  taxMandateDocumentMatches,
   taxMandates,
   taxServiceProducts,
   taxSubjects,
@@ -20,8 +23,22 @@ export type TaxServiceProductCode =
   | "via_retrieval"
   | "sba_monitoring";
 export type TaxMandateType = typeof taxMandates.$inferSelect.mandateType;
+export type TaxMandateDocumentExtraction = {
+  activationCode: string | null;
+  mandateType: TaxMandateType | null;
+  taxYear?: number | null;
+  confidence?: number | null;
+  reason?: string | null;
+  rawExtraction?: Record<string, unknown>;
+};
 
 const taxMandateTypes = new Set<TaxMandateType>(["VIA", "SBA", "BTW", "IB"]);
+const openMandateStatuses = [
+  "draft",
+  "requested",
+  "letter_sent",
+  "activation_required",
+] as const;
 
 function toTaxMandateType(value: string): TaxMandateType | null {
   return taxMandateTypes.has(value as TaxMandateType)
@@ -66,6 +83,64 @@ function mandateNeedsTask(status: typeof taxMandates.$inferSelect.status) {
   return ["draft", "requested", "letter_sent", "activation_required"].includes(
     status,
   );
+}
+
+function activationCodePreview(code: string) {
+  return `...${code.slice(-4)}`;
+}
+
+function confidencePercent(confidence?: number | null) {
+  if (confidence === null || confidence === undefined) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(confidence * 100)));
+}
+
+function scoreMandateDocumentMatch(
+  mandate: {
+    mandateType: TaxMandateType;
+    taxYear: number | null;
+    taskId: string | null;
+  },
+  extraction: TaxMandateDocumentExtraction,
+) {
+  const confidence = confidencePercent(extraction.confidence) ?? 0;
+
+  if (
+    extraction.mandateType &&
+    extraction.mandateType !== mandate.mandateType
+  ) {
+    return -1;
+  }
+
+  if (
+    extraction.taxYear &&
+    mandate.taxYear &&
+    extraction.taxYear !== mandate.taxYear
+  ) {
+    return -1;
+  }
+
+  let score = confidence;
+
+  if (extraction.mandateType === mandate.mandateType) {
+    score += 30;
+  }
+
+  if (!extraction.mandateType) {
+    score += 5;
+  }
+
+  if (extraction.taxYear && extraction.taxYear === mandate.taxYear) {
+    score += 20;
+  }
+
+  if (mandate.taskId) {
+    score += 5;
+  }
+
+  return score;
 }
 
 function subjectTypeForClientKind(clientKind: TaxClientKind) {
@@ -122,62 +197,89 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     return null;
   }
 
-  const [subjects, entitlements, mandates, tasks] = await Promise.all([
-    db
-      .select({
-        id: taxSubjects.id,
-        displayName: taxSubjects.displayName,
-        subjectType: taxSubjects.subjectType,
-        countryCode: taxSubjects.countryCode,
-        role: taxClientSubjects.role,
-        accessStatus: taxClientSubjects.accessStatus,
-      })
-      .from(taxClientSubjects)
-      .innerJoin(taxSubjects, eq(taxSubjects.id, taxClientSubjects.subjectId))
-      .where(eq(taxClientSubjects.clientId, client.id)),
-    db
-      .select({
-        id: taxEntitlements.id,
-        status: taxEntitlements.status,
-        source: taxEntitlements.source,
-        productCode: taxServiceProducts.code,
-        productName: taxServiceProducts.name,
-      })
-      .from(taxEntitlements)
-      .innerJoin(
-        taxServiceProducts,
-        eq(taxServiceProducts.id, taxEntitlements.productId),
-      )
-      .where(eq(taxEntitlements.clientId, client.id)),
-    db
-      .select({
-        id: taxMandates.id,
-        subjectId: taxMandates.subjectId,
-        entitlementId: taxMandates.entitlementId,
-        mandateType: taxMandates.mandateType,
-        status: taxMandates.status,
-        taxYear: taxMandates.taxYear,
-        requestedAt: taxMandates.requestedAt,
-        activatedAt: taxMandates.activatedAt,
-        expiresAt: taxMandates.expiresAt,
-      })
-      .from(taxMandates)
-      .where(eq(taxMandates.clientId, client.id)),
-    db
-      .select({
-        id: taxTasks.id,
-        subjectId: taxTasks.subjectId,
-        mandateId: taxTasks.mandateId,
-        title: taxTasks.title,
-        description: taxTasks.description,
-        status: taxTasks.status,
-        dueDate: taxTasks.dueDate,
-        createdAt: taxTasks.createdAt,
-        resolvedAt: taxTasks.resolvedAt,
-      })
-      .from(taxTasks)
-      .where(eq(taxTasks.clientId, client.id)),
-  ]);
+  const [subjects, entitlements, mandates, tasks, documentMatches] =
+    await Promise.all([
+      db
+        .select({
+          id: taxSubjects.id,
+          displayName: taxSubjects.displayName,
+          subjectType: taxSubjects.subjectType,
+          countryCode: taxSubjects.countryCode,
+          role: taxClientSubjects.role,
+          accessStatus: taxClientSubjects.accessStatus,
+        })
+        .from(taxClientSubjects)
+        .innerJoin(taxSubjects, eq(taxSubjects.id, taxClientSubjects.subjectId))
+        .where(eq(taxClientSubjects.clientId, client.id)),
+      db
+        .select({
+          id: taxEntitlements.id,
+          status: taxEntitlements.status,
+          source: taxEntitlements.source,
+          productCode: taxServiceProducts.code,
+          productName: taxServiceProducts.name,
+        })
+        .from(taxEntitlements)
+        .innerJoin(
+          taxServiceProducts,
+          eq(taxServiceProducts.id, taxEntitlements.productId),
+        )
+        .where(eq(taxEntitlements.clientId, client.id)),
+      db
+        .select({
+          id: taxMandates.id,
+          subjectId: taxMandates.subjectId,
+          entitlementId: taxMandates.entitlementId,
+          mandateType: taxMandates.mandateType,
+          status: taxMandates.status,
+          taxYear: taxMandates.taxYear,
+          requestedAt: taxMandates.requestedAt,
+          activatedAt: taxMandates.activatedAt,
+          expiresAt: taxMandates.expiresAt,
+        })
+        .from(taxMandates)
+        .where(eq(taxMandates.clientId, client.id)),
+      db
+        .select({
+          id: taxTasks.id,
+          subjectId: taxTasks.subjectId,
+          mandateId: taxTasks.mandateId,
+          title: taxTasks.title,
+          description: taxTasks.description,
+          status: taxTasks.status,
+          dueDate: taxTasks.dueDate,
+          createdAt: taxTasks.createdAt,
+          resolvedAt: taxTasks.resolvedAt,
+        })
+        .from(taxTasks)
+        .where(eq(taxTasks.clientId, client.id)),
+      db
+        .select({
+          id: taxMandateDocumentMatches.id,
+          mandateId: taxMandateDocumentMatches.mandateId,
+          taskId: taxMandateDocumentMatches.taskId,
+          documentId: taxMandateDocumentMatches.documentId,
+          documentTitle: documents.title,
+          documentDate: documents.date,
+          filePathTokens: taxMandateDocumentMatches.filePathTokens,
+          mimetype: taxMandateDocumentMatches.mimetype,
+          status: taxMandateDocumentMatches.status,
+          extractedCodePreview: taxMandateDocumentMatches.extractedCodePreview,
+          extractedMandateType: taxMandateDocumentMatches.extractedMandateType,
+          extractedTaxYear: taxMandateDocumentMatches.extractedTaxYear,
+          extractionConfidence: taxMandateDocumentMatches.extractionConfidence,
+          extractionReason: taxMandateDocumentMatches.extractionReason,
+          matchedAt: taxMandateDocumentMatches.matchedAt,
+          confirmedAt: taxMandateDocumentMatches.confirmedAt,
+          createdAt: taxMandateDocumentMatches.createdAt,
+        })
+        .from(taxMandateDocumentMatches)
+        .leftJoin(
+          documents,
+          eq(documents.id, taxMandateDocumentMatches.documentId),
+        )
+        .where(eq(taxMandateDocumentMatches.clientId, client.id)),
+    ]);
 
   return {
     ...client,
@@ -185,6 +287,216 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     entitlements,
     mandates,
     tasks,
+    documentMatches,
+  };
+}
+
+export async function getOpenTaxMandatesForTeam(db: Database, teamId: string) {
+  return db
+    .select({
+      id: taxMandates.id,
+      clientId: taxMandates.clientId,
+      teamId: taxMandates.teamId,
+      subjectId: taxMandates.subjectId,
+      mandateType: taxMandates.mandateType,
+      taxYear: taxMandates.taxYear,
+      status: taxMandates.status,
+      taskId: taxTasks.id,
+    })
+    .from(taxMandates)
+    .leftJoin(
+      taxTasks,
+      and(
+        eq(taxTasks.mandateId, taxMandates.id),
+        inArray(taxTasks.status, ["open", "answered"]),
+      ),
+    )
+    .where(
+      and(
+        eq(taxMandates.teamId, teamId),
+        inArray(taxMandates.status, [...openMandateStatuses]),
+      ),
+    );
+}
+
+export async function matchTaxMandateDocument(
+  db: Database,
+  params: {
+    teamId: string;
+    filePathTokens: string[];
+    mimetype: string;
+    size?: number | null;
+    uploadedByUserId?: string | null;
+    extraction: TaxMandateDocumentExtraction;
+  },
+) {
+  const [client] = await db
+    .select({
+      id: taxClients.id,
+    })
+    .from(taxClients)
+    .where(eq(taxClients.teamId, params.teamId))
+    .limit(1);
+
+  if (!client) {
+    return { matched: false, reason: "No tax client found." };
+  }
+
+  if (!params.extraction.activationCode) {
+    return { matched: false, reason: "No activation code extracted." };
+  }
+
+  const [document] = await db
+    .select({
+      id: documents.id,
+      date: documents.date,
+    })
+    .from(documents)
+    .where(
+      and(
+        eq(documents.teamId, params.teamId),
+        eq(documents.pathTokens, params.filePathTokens),
+      ),
+    )
+    .limit(1);
+
+  const openMandates = await getOpenTaxMandatesForTeam(db, params.teamId);
+
+  if (!openMandates.length) {
+    return { matched: false, reason: "No open tax mandates found." };
+  }
+
+  const rankedMandates = openMandates
+    .map((mandate) => ({
+      mandate,
+      score: scoreMandateDocumentMatch(mandate, params.extraction),
+    }))
+    .filter((candidate) => candidate.score >= 0)
+    .sort((a, b) => b.score - a.score);
+
+  const best = rankedMandates.at(0);
+
+  if (!best || best.score < 55) {
+    return { matched: false, reason: "No open mandate matched confidently." };
+  }
+
+  const matchingMandates = rankedMandates.map(({ mandate }) => mandate);
+  const matchingTaxYears = new Set(
+    matchingMandates
+      .map((mandate) => mandate.taxYear)
+      .filter((taxYear): taxYear is number => taxYear !== null),
+  );
+
+  if (!params.extraction.taxYear && matchingTaxYears.size > 1) {
+    return {
+      matched: false,
+      reason: "Multiple open tax years matched; tax year is required.",
+    };
+  }
+
+  const topRankedMandates = rankedMandates.filter(
+    (candidate) => candidate.score === best.score,
+  );
+
+  if (topRankedMandates.length > 1) {
+    return {
+      matched: false,
+      reason: "Multiple open mandates matched equally.",
+    };
+  }
+
+  const now = new Date().toISOString();
+  const extractionConfidence = confidencePercent(params.extraction.confidence);
+  const status =
+    extractionConfidence !== null && extractionConfidence >= 70
+      ? "matched"
+      : "needs_review";
+  const encryptedCode = encrypt(params.extraction.activationCode);
+  const matchValues = {
+    clientId: client.id,
+    teamId: params.teamId,
+    mandateId: best.mandate.id,
+    taskId: best.mandate.taskId,
+    documentId: document?.id ?? null,
+    uploadedByUserId: params.uploadedByUserId ?? null,
+    filePathTokens: params.filePathTokens,
+    mimetype: params.mimetype,
+    size: params.size ?? null,
+    status,
+    extractedCodeEncrypted: encryptedCode,
+    extractedCodePreview: activationCodePreview(
+      params.extraction.activationCode,
+    ),
+    extractedMandateType: params.extraction.mandateType,
+    extractedTaxYear: params.extraction.taxYear ?? null,
+    extractionConfidence,
+    extractionReason: params.extraction.reason ?? null,
+    rawExtraction: {
+      ...(params.extraction.rawExtraction ?? {}),
+      documentDate: document?.date ?? null,
+      matchScore: best.score,
+    },
+    matchedAt: now,
+    updatedAt: now,
+  } satisfies typeof taxMandateDocumentMatches.$inferInsert;
+
+  const [existingMatch] = await db
+    .select({
+      id: taxMandateDocumentMatches.id,
+    })
+    .from(taxMandateDocumentMatches)
+    .where(
+      and(
+        eq(taxMandateDocumentMatches.teamId, params.teamId),
+        eq(taxMandateDocumentMatches.mandateId, best.mandate.id),
+        eq(taxMandateDocumentMatches.filePathTokens, params.filePathTokens),
+      ),
+    )
+    .limit(1);
+
+  const [documentMatch] = existingMatch
+    ? await db
+        .update(taxMandateDocumentMatches)
+        .set(matchValues)
+        .where(eq(taxMandateDocumentMatches.id, existingMatch.id))
+        .returning()
+    : await db
+        .insert(taxMandateDocumentMatches)
+        .values(matchValues)
+        .returning();
+
+  if (!documentMatch) {
+    throw new Error("Failed to store tax mandate document match");
+  }
+
+  if (status === "matched") {
+    await db
+      .update(taxMandates)
+      .set({
+        status: "activation_required",
+        activationCodeEncrypted: encryptedCode,
+        updatedAt: now,
+      })
+      .where(eq(taxMandates.id, best.mandate.id));
+
+    if (best.mandate.taskId) {
+      await db
+        .update(taxTasks)
+        .set({
+          status: "answered",
+          updatedAt: now,
+        })
+        .where(eq(taxTasks.id, best.mandate.taskId));
+    }
+  }
+
+  return {
+    matched: true,
+    documentMatch,
+    mandateId: best.mandate.id,
+    taskId: best.mandate.taskId,
+    score: best.score,
+    status,
   };
 }
 

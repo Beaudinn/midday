@@ -26,7 +26,7 @@ interface ClassificationResult {
  */
 export class ClassifyDocumentProcessor extends BaseProcessor<ClassifyDocumentPayload> {
   async process(job: Job<ClassifyDocumentPayload>): Promise<void> {
-    const { content, fileName, teamId } = job.data;
+    const { content, fileName, mimetype, teamId } = job.data;
     const db = getDb();
 
     // fileName is the full path (e.g., "teamId/filename.pdf")
@@ -184,5 +184,16 @@ export class ClassifyDocumentProcessor extends BaseProcessor<ClassifyDocumentPay
         hasTitle: !!finalTitle,
       });
     }
+
+    await triggerJob(
+      "match-tax-mandate-document",
+      {
+        filePath: pathTokens,
+        mimetype: mimetype ?? "application/octet-stream",
+        teamId,
+      },
+      "documents",
+      { jobId: `tax-mandate-match_${teamId}_${fileName}_${Date.now()}` },
+    );
   }
 }

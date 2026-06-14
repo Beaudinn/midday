@@ -213,5 +213,17 @@ export class ClassifyImageProcessor extends BaseProcessor<ClassifyImagePayload> 
         hasTitle: !!finalTitle,
       });
     }
+
+    await triggerJob(
+      "match-tax-mandate-document",
+      {
+        filePath: pathTokens,
+        mimetype: fileData.type || "image/jpeg",
+        size: fileData.size,
+        teamId,
+      },
+      "documents",
+      { jobId: `tax-mandate-match_${teamId}_${fileName}_${Date.now()}` },
+    );
   }
 }

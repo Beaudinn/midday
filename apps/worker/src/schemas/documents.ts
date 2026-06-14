@@ -22,6 +22,7 @@ export type ClassifyImagePayload = z.infer<typeof classifyImageSchema>;
 export const classifyDocumentSchema = z.object({
   content: z.string(),
   fileName: z.string(),
+  mimetype: z.string().optional(),
   teamId: z.string().uuid(),
 });
 
@@ -34,3 +35,14 @@ export const embedDocumentTagsSchema = z.object({
 });
 
 export type EmbedDocumentTagsPayload = z.infer<typeof embedDocumentTagsSchema>;
+
+export const matchTaxMandateDocumentSchema = z.object({
+  mimetype: z.string(),
+  filePath: z.array(z.string()),
+  teamId: z.string().uuid(),
+  size: z.number().optional(),
+});
+
+export type MatchTaxMandateDocumentPayload = z.infer<
+  typeof matchTaxMandateDocumentSchema
+>;
