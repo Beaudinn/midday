@@ -23,7 +23,7 @@ function FeatureRow({ label, tooltip }: PlanFeature) {
       <span
         className={cn(
           "font-sans text-sm text-foreground leading-relaxed",
-          tooltip && "border-b border-dashed border-[#878787]/30 cursor-help",
+          tooltip && "border-b border-dashed border-muted-foreground/30 cursor-help",
         )}
       >
         {label}
