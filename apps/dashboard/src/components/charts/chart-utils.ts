@@ -20,7 +20,7 @@ export const chartClasses = {
 // Common chart configurations
 export const commonChartConfig = {
   margin: { top: 6, right: 20, left: 0, bottom: 6 },
-  fontFamily: "var(--font-hedvig-sans)",
+  fontFamily: "var(--font-montserrat)",
   fontSize: 10,
   animationDuration: 300,
 } as const;

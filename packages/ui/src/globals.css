@@ -5,25 +5,30 @@
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    --foreground: 229 84% 6%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 229 84% 6%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
+    --popover-foreground: 229 84% 6%;
+    --primary: 221 76% 44%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 100% 96%;
+    --secondary-foreground: 221 76% 32%;
+    --muted: 220 100% 97%;
+    --muted-foreground: 222 16% 47%;
+    --accent: 221 100% 95%;
+    --accent-foreground: 221 76% 32%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 221 60% 90%;
+    --input: 221 50% 90%;
+    --ring: 221 76% 44%;
     --radius: 0.5rem;
+    /* Brand */
+    --brand: 221 76% 44%;
+    --brand-foreground: 0 0% 100%;
+    --brand-accent: 32 96% 54%;
+    --brand-accent-foreground: 0 0% 100%;
     /* Chart colors */
     --chart-grid-stroke: #e6e6e6;
     --chart-axis-text: #707070;
@@ -42,25 +47,30 @@
   }
 
   .dark {
-    --background: 0 0% 3.9%;
+    --background: 226 64% 8%;
     --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
+    --card: 226 60% 10%;
     --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
+    --popover: 226 60% 10%;
     --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
+    --primary: 221 83% 62%;
+    --primary-foreground: 226 64% 8%;
+    --secondary: 224 35% 17%;
     --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
+    --muted: 224 35% 17%;
+    --muted-foreground: 220 20% 65%;
+    --accent: 224 35% 20%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 62.8% 45%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
+    --border: 224 35% 20%;
+    --input: 224 35% 20%;
+    --ring: 221 83% 62%;
+    /* Brand */
+    --brand: 221 83% 62%;
+    --brand-foreground: 226 64% 8%;
+    --brand-accent: 32 96% 54%;
+    --brand-accent-foreground: 226 64% 8%;
     /* Chart colors */
     --chart-grid-stroke: #1d1d1d;
     --chart-axis-text: #666666;

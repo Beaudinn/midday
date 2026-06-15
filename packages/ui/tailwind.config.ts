@@ -7,9 +7,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: "var(--font-hedvig-sans)",
-        mono: "var(--font-hedvig-sans)",
-        serif: "var(--font-hedvig-serif)",
+        sans: "var(--font-montserrat)",
+        mono: "var(--font-montserrat)",
+        serif: "var(--font-montserrat)",
       },
       colors: {
         border: "hsl(var(--border))",
@@ -44,6 +44,12 @@ export default {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
+        },
+        brand: {
+          DEFAULT: "hsl(var(--brand))",
+          foreground: "hsl(var(--brand-foreground))",
+          accent: "hsl(var(--brand-accent))",
+          "accent-foreground": "hsl(var(--brand-accent-foreground))",
         },
       },
       borderRadius: {
