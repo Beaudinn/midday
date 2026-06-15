@@ -7,6 +7,7 @@ import { CompanyLogo } from "@/components/company-logo";
 import { CompanyName } from "@/components/company-name";
 import { DeleteTeam } from "@/components/delete-team";
 import { ExportAllData } from "@/components/export-all-data";
+import { TaxProfileSettings } from "@/components/tax-profile-settings";
 import { TeamIdSection } from "@/components/team-id-section";
 import { HydrateClient, prefetch, trpc } from "@/trpc/server";
 
@@ -16,6 +17,7 @@ export const metadata: Metadata = {
 
 export default async function Account() {
   prefetch(trpc.team.current.queryOptions());
+  prefetch(trpc.tax.current.queryOptions());
 
   return (
     <HydrateClient>
@@ -26,6 +28,7 @@ export default async function Account() {
         <CompanyCountry />
         <BaseCurrency />
         <CompanyFiscalYear />
+        <TaxProfileSettings />
         <TeamIdSection />
         <ExportAllData />
         <DeleteTeam />

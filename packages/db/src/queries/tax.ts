@@ -235,6 +235,10 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
           displayName: taxSubjects.displayName,
           subjectType: taxSubjects.subjectType,
           countryCode: taxSubjects.countryCode,
+          kvkNumber: taxSubjects.kvkNumber,
+          vatNumber: taxSubjects.vatNumber,
+          hasBsn: sql<boolean>`${taxSubjects.encryptedBsn} is not null`,
+          hasRsin: sql<boolean>`${taxSubjects.encryptedRsin} is not null`,
           role: taxClientSubjects.role,
           accessStatus: taxClientSubjects.accessStatus,
         })
@@ -762,6 +766,89 @@ export async function queueTaxDigipoortMandateRequest(
   }
 
   return job;
+}
+
+export async function updateTaxSubjectIdentityForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    subjectId: string;
+    displayName?: string;
+    countryCode?: string;
+    bsn?: string | null;
+    rsin?: string | null;
+    kvkNumber?: string | null;
+    vatNumber?: string | null;
+  },
+) {
+  const [subjectLink] = await db
+    .select({
+      subjectId: taxClientSubjects.subjectId,
+    })
+    .from(taxClientSubjects)
+    .where(
+      and(
+        eq(taxClientSubjects.teamId, params.teamId),
+        eq(taxClientSubjects.subjectId, params.subjectId),
+        eq(taxClientSubjects.accessStatus, "active"),
+      ),
+    )
+    .limit(1);
+
+  if (!subjectLink) {
+    throw new Error("Tax subject not found for this team");
+  }
+
+  const values: Partial<typeof taxSubjects.$inferInsert> = {
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (params.displayName !== undefined) {
+    values.displayName = params.displayName.trim();
+  }
+
+  if (params.countryCode !== undefined) {
+    values.countryCode = params.countryCode.trim().toUpperCase();
+  }
+
+  if (params.bsn !== undefined) {
+    const bsn = params.bsn?.trim();
+    values.encryptedBsn = bsn ? encrypt(bsn) : null;
+  }
+
+  if (params.rsin !== undefined) {
+    const rsin = params.rsin?.trim();
+    values.encryptedRsin = rsin ? encrypt(rsin) : null;
+  }
+
+  if (params.kvkNumber !== undefined) {
+    values.kvkNumber = params.kvkNumber?.trim() || null;
+  }
+
+  if (params.vatNumber !== undefined) {
+    values.vatNumber = params.vatNumber?.trim().toUpperCase() || null;
+  }
+
+  const [subject] = await db
+    .update(taxSubjects)
+    .set(values)
+    .where(eq(taxSubjects.id, params.subjectId))
+    .returning({
+      id: taxSubjects.id,
+      displayName: taxSubjects.displayName,
+      subjectType: taxSubjects.subjectType,
+      countryCode: taxSubjects.countryCode,
+      kvkNumber: taxSubjects.kvkNumber,
+      vatNumber: taxSubjects.vatNumber,
+      hasBsn: sql<boolean>`${taxSubjects.encryptedBsn} is not null`,
+      hasRsin: sql<boolean>`${taxSubjects.encryptedRsin} is not null`,
+    });
+
+  if (!subject) {
+    throw new Error("Failed to update tax subject");
+  }
+
+  return subject;
 }
 
 export async function queueTaxDigipoortMandateActivation(
