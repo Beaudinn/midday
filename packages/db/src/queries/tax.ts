@@ -665,6 +665,16 @@ function shouldDryRunDigipoort() {
   );
 }
 
+function getPayloadString(payload: unknown, key: string) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const value = (payload as Record<string, unknown>)[key];
+
+  return typeof value === "string" ? value : null;
+}
+
 export async function queueTaxDigipoortMandateRequest(
   db: Database,
   params: {
@@ -754,6 +764,148 @@ export async function queueTaxDigipoortMandateRequest(
   return job;
 }
 
+export async function queueTaxDigipoortMandateActivation(
+  db: Database,
+  params: {
+    teamId: string;
+    matchId: string;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const [match] = await tx
+      .select({
+        id: taxMandateDocumentMatches.id,
+        clientId: taxMandateDocumentMatches.clientId,
+        teamId: taxMandateDocumentMatches.teamId,
+        mandateId: taxMandateDocumentMatches.mandateId,
+        taskId: taxMandateDocumentMatches.taskId,
+        documentId: taxMandateDocumentMatches.documentId,
+        status: taxMandateDocumentMatches.status,
+        extractedCodeEncrypted:
+          taxMandateDocumentMatches.extractedCodeEncrypted,
+        extractedMandateType: taxMandateDocumentMatches.extractedMandateType,
+        extractedTaxYear: taxMandateDocumentMatches.extractedTaxYear,
+      })
+      .from(taxMandateDocumentMatches)
+      .where(
+        and(
+          eq(taxMandateDocumentMatches.id, params.matchId),
+          eq(taxMandateDocumentMatches.teamId, params.teamId),
+        ),
+      )
+      .limit(1);
+
+    if (!match) {
+      throw new Error("Tax mandate document match not found");
+    }
+
+    if (!["matched", "needs_review"].includes(match.status)) {
+      throw new Error("Tax mandate document match is not ready to activate");
+    }
+
+    if (!match.extractedCodeEncrypted) {
+      throw new Error("Tax mandate document match has no activation code");
+    }
+
+    const [mandate] = await tx
+      .select({
+        id: taxMandates.id,
+        subjectId: taxMandates.subjectId,
+        mandateType: taxMandates.mandateType,
+        taxYear: taxMandates.taxYear,
+        status: taxMandates.status,
+      })
+      .from(taxMandates)
+      .where(
+        and(
+          eq(taxMandates.id, match.mandateId),
+          eq(taxMandates.teamId, params.teamId),
+        ),
+      )
+      .limit(1);
+
+    if (!mandate) {
+      throw new Error("Tax mandate not found for document match");
+    }
+
+    if (["active", "rejected", "expired", "revoked"].includes(mandate.status)) {
+      throw new Error("Tax mandate cannot be activated in its current status");
+    }
+
+    const [existingJob] = await tx
+      .select()
+      .from(taxDigipoortJobs)
+      .where(
+        and(
+          eq(taxDigipoortJobs.teamId, params.teamId),
+          eq(taxDigipoortJobs.mandateId, match.mandateId),
+          eq(taxDigipoortJobs.operation, "activate_mandate"),
+          inArray(taxDigipoortJobs.status, ["queued", "processing"]),
+        ),
+      )
+      .orderBy(desc(taxDigipoortJobs.createdAt))
+      .limit(1);
+
+    if (existingJob) {
+      return existingJob;
+    }
+
+    const now = new Date().toISOString();
+
+    await tx
+      .update(taxMandates)
+      .set({
+        status: "activation_required",
+        activationCodeEncrypted: match.extractedCodeEncrypted,
+        updatedAt: now,
+      })
+      .where(eq(taxMandates.id, match.mandateId));
+
+    if (match.taskId) {
+      await tx
+        .update(taxTasks)
+        .set({
+          status: "answered",
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(taxTasks.id, match.taskId),
+            eq(taxTasks.teamId, params.teamId),
+            eq(taxTasks.status, "open"),
+          ),
+        );
+    }
+
+    const [job] = await tx
+      .insert(taxDigipoortJobs)
+      .values({
+        clientId: match.clientId,
+        teamId: match.teamId,
+        mandateId: match.mandateId,
+        operation: "activate_mandate",
+        status: "queued",
+        payload: {
+          matchId: match.id,
+          documentId: match.documentId,
+          mandateType: match.extractedMandateType ?? mandate.mandateType,
+          taxYear: match.extractedTaxYear ?? mandate.taxYear,
+          subjectId: mandate.subjectId,
+          codeSource: "mandate_document_match",
+        },
+        queuedAt: now,
+        updatedAt: now,
+      })
+      .returning();
+
+    if (!job) {
+      throw new Error("Failed to queue Digipoort mandate activation");
+    }
+
+    return job;
+  });
+}
+
 export async function processTaxDigipoortJob(
   db: Database,
   params: {
@@ -831,6 +983,7 @@ export async function processTaxDigipoortJob(
     }
 
     const completedAt = new Date().toISOString();
+    const dryRun = shouldDryRunDigipoort();
     const executionContext: TaxDigipoortJobExecutionContext = {
       job,
       mandate: {
@@ -838,26 +991,29 @@ export async function processTaxDigipoortJob(
         mandateType: mandateContext.mandateType,
         taxYear: mandateContext.taxYear,
         status: mandateContext.mandateStatus,
-        activationCode: mandateContext.activationCodeEncrypted
-          ? decrypt(mandateContext.activationCodeEncrypted)
-          : null,
+        activationCode:
+          !dryRun && mandateContext.activationCodeEncrypted
+            ? decrypt(mandateContext.activationCodeEncrypted)
+            : null,
       },
       subject: {
         id: mandateContext.subjectId,
         subjectType: mandateContext.subjectType,
         displayName: mandateContext.displayName,
         countryCode: mandateContext.countryCode,
-        bsn: mandateContext.encryptedBsn
-          ? decrypt(mandateContext.encryptedBsn)
-          : null,
-        rsin: mandateContext.encryptedRsin
-          ? decrypt(mandateContext.encryptedRsin)
-          : null,
+        bsn:
+          !dryRun && mandateContext.encryptedBsn
+            ? decrypt(mandateContext.encryptedBsn)
+            : null,
+        rsin:
+          !dryRun && mandateContext.encryptedRsin
+            ? decrypt(mandateContext.encryptedRsin)
+            : null,
         kvkNumber: mandateContext.kvkNumber,
         vatNumber: mandateContext.vatNumber,
       },
     };
-    const execution = shouldDryRunDigipoort()
+    const execution = dryRun
       ? {
           providerReference: `dry-run:${job.operation}:${job.id}`,
           result: {
@@ -897,6 +1053,8 @@ export async function processTaxDigipoortJob(
     }
 
     if (job.operation === "activate_mandate") {
+      const matchId = getPayloadString(job.payload, "matchId");
+
       await db
         .update(taxMandates)
         .set({
@@ -921,6 +1079,22 @@ export async function processTaxDigipoortJob(
             inArray(taxTasks.status, ["open", "answered"]),
           ),
         );
+
+      if (matchId) {
+        await db
+          .update(taxMandateDocumentMatches)
+          .set({
+            status: "confirmed",
+            confirmedAt: completedAt,
+            updatedAt: completedAt,
+          })
+          .where(
+            and(
+              eq(taxMandateDocumentMatches.id, matchId),
+              eq(taxMandateDocumentMatches.teamId, params.teamId),
+            ),
+          );
+      }
     }
 
     const [completedJob] = await db

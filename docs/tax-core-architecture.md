@@ -143,10 +143,12 @@ queue triggers `match-tax-mandate-document`:
   is confident enough
 
 The final Digipoort/SBR activation remains a separate confirmed backend action.
-The current admin implementation supports this as a manual confirmation action:
-confirming a matched mandate document marks the document match `confirmed`, the
-mandate `active` and the related task `resolved`. A later Digipoort client can
-replace the internals of that action without changing the admin workflow.
+The current admin implementation supports this as a queued Digipoort activation
+action and keeps manual confirmation as a fallback. Activating a matched mandate
+document queues an `activate_mandate` Digipoort job using the encrypted
+activation code from `tax_mandate_document_matches`. When the worker completes
+the job, the document match becomes `confirmed`, the mandate becomes `active`
+and the related task becomes `resolved`.
 
 ## Digipoort/SBR Jobs
 
@@ -154,6 +156,8 @@ Digipoort/SBR work is modeled as durable tax work in `tax_digipoort_jobs`, not
 as ad hoc admin state:
 
 - admin action queues a `request_mandate` job for a specific `tax_mandates` row
+- admin action queues an `activate_mandate` job from a matched OCR activation
+  code
 - the API records the tax job and enqueues `process-tax-digipoort-job` on the
   `tax` BullMQ queue
 - the worker marks the job `processing`, stores attempts and completes or fails

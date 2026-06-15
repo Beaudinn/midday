@@ -12,6 +12,7 @@ import {
   getAdminClientTeams,
   getPlatformStaffByUserId,
   getTaxServiceProducts,
+  queueTaxDigipoortMandateActivation,
   queueTaxDigipoortMandateRequest,
   recordTaxAuditEvent,
 } from "@midday/db/queries";
@@ -208,6 +209,53 @@ export const adminRouter = createTRPCRouter({
         resourceType: "tax_mandate",
         resourceId: input.mandateId,
         metadata: {
+          digipoortJobId: digipoortJob.id,
+          workerJobId: job.id,
+          operation: digipoortJob.operation,
+        },
+      });
+
+      return {
+        digipoortJob,
+        job,
+      };
+    }),
+
+  activateTaxMandateViaDigipoort: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        matchId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const digipoortJob = await queueTaxDigipoortMandateActivation(db, {
+        teamId: input.teamId,
+        matchId: input.matchId,
+      });
+
+      const job = await triggerJob(
+        "process-tax-digipoort-job",
+        {
+          teamId: input.teamId,
+          jobId: digipoortJob.id,
+          operation: digipoortJob.operation,
+        },
+        "tax",
+        {
+          jobId: `tax-digipoort_${input.teamId}_${digipoortJob.id}`,
+          attempts: 3,
+        },
+      );
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_mandate.digipoort_activate",
+        resourceType: "tax_mandate",
+        resourceId: digipoortJob.mandateId ?? input.matchId,
+        metadata: {
+          matchId: input.matchId,
           digipoortJobId: digipoortJob.id,
           workerJobId: job.id,
           operation: digipoortJob.operation,
