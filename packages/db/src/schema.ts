@@ -2,6 +2,7 @@ import { relations, type SQL, sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   customType,
   date,
   foreignKey,
@@ -236,6 +237,20 @@ export const taxClientSubjectRoleEnum = pgEnum("tax_client_subject_role", [
 export const taxClientSubjectAccessStatusEnum = pgEnum(
   "tax_client_subject_access_status",
   ["active", "view_only", "removed"],
+);
+export const taxSubjectRelationshipTypeEnum = pgEnum(
+  "tax_subject_relationship_type",
+  [
+    "spouse",
+    "registered_partner",
+    "cohabiting_partner",
+    "former_partner",
+    "other",
+  ],
+);
+export const taxSubjectRelationshipStatusEnum = pgEnum(
+  "tax_subject_relationship_status",
+  ["active", "ended", "archived"],
 );
 export const taxEntitlementSourceEnum = pgEnum("tax_entitlement_source", [
   "team_plan",
@@ -4260,6 +4275,66 @@ export const taxClientSubjects = pgTable(
       foreignColumns: [taxSubjects.id],
       name: "tax_client_subjects_subject_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+export const taxSubjectRelationships = pgTable(
+  "tax_subject_relationships",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    primarySubjectId: uuid("primary_subject_id").notNull(),
+    relatedSubjectId: uuid("related_subject_id").notNull(),
+    relationshipType:
+      taxSubjectRelationshipTypeEnum("relationship_type").notNull(),
+    fiscalPartner: boolean("fiscal_partner").default(true).notNull(),
+    status: taxSubjectRelationshipStatusEnum().default("active").notNull(),
+    validFrom: date("valid_from"),
+    validTo: date("valid_to"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("tax_subject_relationships_client_status_idx").on(
+      table.clientId,
+      table.status,
+    ),
+    index("tax_subject_relationships_team_id_idx").on(table.teamId),
+    index("tax_subject_relationships_primary_subject_idx").on(
+      table.primarySubjectId,
+    ),
+    index("tax_subject_relationships_related_subject_idx").on(
+      table.relatedSubjectId,
+    ),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_subject_relationships_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_subject_relationships_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.primarySubjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_subject_relationships_primary_subject_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.relatedSubjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_subject_relationships_related_subject_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "tax_subject_relationships_distinct_subjects_check",
+      sql`${table.primarySubjectId} <> ${table.relatedSubjectId}`,
+    ),
   ],
 );
 

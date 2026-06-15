@@ -10,6 +10,7 @@ import {
   taxMandateDocumentMatches,
   taxMandates,
   taxServiceProducts,
+  taxSubjectRelationships,
   taxSubjects,
   taxTasks,
   teams,
@@ -26,6 +27,8 @@ export type TaxServiceProductCode =
 export type TaxMandateType = typeof taxMandates.$inferSelect.mandateType;
 export type TaxDigipoortOperation =
   typeof taxDigipoortJobs.$inferSelect.operation;
+export type TaxSubjectRelationshipType =
+  typeof taxSubjectRelationships.$inferSelect.relationshipType;
 export type TaxDigipoortJobExecutionContext = {
   job: typeof taxDigipoortJobs.$inferSelect;
   mandate: {
@@ -227,93 +230,114 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     return null;
   }
 
-  const [subjects, entitlements, mandates, tasks, documentMatches] =
-    await Promise.all([
-      db
-        .select({
-          id: taxSubjects.id,
-          displayName: taxSubjects.displayName,
-          subjectType: taxSubjects.subjectType,
-          countryCode: taxSubjects.countryCode,
-          kvkNumber: taxSubjects.kvkNumber,
-          vatNumber: taxSubjects.vatNumber,
-          hasBsn: sql<boolean>`${taxSubjects.encryptedBsn} is not null`,
-          hasRsin: sql<boolean>`${taxSubjects.encryptedRsin} is not null`,
-          role: taxClientSubjects.role,
-          accessStatus: taxClientSubjects.accessStatus,
-        })
-        .from(taxClientSubjects)
-        .innerJoin(taxSubjects, eq(taxSubjects.id, taxClientSubjects.subjectId))
-        .where(eq(taxClientSubjects.clientId, client.id)),
-      db
-        .select({
-          id: taxEntitlements.id,
-          status: taxEntitlements.status,
-          source: taxEntitlements.source,
-          productCode: taxServiceProducts.code,
-          productName: taxServiceProducts.name,
-        })
-        .from(taxEntitlements)
-        .innerJoin(
-          taxServiceProducts,
-          eq(taxServiceProducts.id, taxEntitlements.productId),
-        )
-        .where(eq(taxEntitlements.clientId, client.id)),
-      db
-        .select({
-          id: taxMandates.id,
-          subjectId: taxMandates.subjectId,
-          entitlementId: taxMandates.entitlementId,
-          mandateType: taxMandates.mandateType,
-          status: taxMandates.status,
-          taxYear: taxMandates.taxYear,
-          requestedAt: taxMandates.requestedAt,
-          activatedAt: taxMandates.activatedAt,
-          expiresAt: taxMandates.expiresAt,
-        })
-        .from(taxMandates)
-        .where(eq(taxMandates.clientId, client.id)),
-      db
-        .select({
-          id: taxTasks.id,
-          subjectId: taxTasks.subjectId,
-          mandateId: taxTasks.mandateId,
-          title: taxTasks.title,
-          description: taxTasks.description,
-          status: taxTasks.status,
-          dueDate: taxTasks.dueDate,
-          createdAt: taxTasks.createdAt,
-          resolvedAt: taxTasks.resolvedAt,
-        })
-        .from(taxTasks)
-        .where(eq(taxTasks.clientId, client.id)),
-      db
-        .select({
-          id: taxMandateDocumentMatches.id,
-          mandateId: taxMandateDocumentMatches.mandateId,
-          taskId: taxMandateDocumentMatches.taskId,
-          documentId: taxMandateDocumentMatches.documentId,
-          documentTitle: documents.title,
-          documentDate: documents.date,
-          filePathTokens: taxMandateDocumentMatches.filePathTokens,
-          mimetype: taxMandateDocumentMatches.mimetype,
-          status: taxMandateDocumentMatches.status,
-          extractedCodePreview: taxMandateDocumentMatches.extractedCodePreview,
-          extractedMandateType: taxMandateDocumentMatches.extractedMandateType,
-          extractedTaxYear: taxMandateDocumentMatches.extractedTaxYear,
-          extractionConfidence: taxMandateDocumentMatches.extractionConfidence,
-          extractionReason: taxMandateDocumentMatches.extractionReason,
-          matchedAt: taxMandateDocumentMatches.matchedAt,
-          confirmedAt: taxMandateDocumentMatches.confirmedAt,
-          createdAt: taxMandateDocumentMatches.createdAt,
-        })
-        .from(taxMandateDocumentMatches)
-        .leftJoin(
-          documents,
-          eq(documents.id, taxMandateDocumentMatches.documentId),
-        )
-        .where(eq(taxMandateDocumentMatches.clientId, client.id)),
-    ]);
+  const [
+    subjects,
+    subjectRelationships,
+    entitlements,
+    mandates,
+    tasks,
+    documentMatches,
+  ] = await Promise.all([
+    db
+      .select({
+        id: taxSubjects.id,
+        displayName: taxSubjects.displayName,
+        subjectType: taxSubjects.subjectType,
+        countryCode: taxSubjects.countryCode,
+        kvkNumber: taxSubjects.kvkNumber,
+        vatNumber: taxSubjects.vatNumber,
+        hasBsn: sql<boolean>`${taxSubjects.encryptedBsn} is not null`,
+        hasRsin: sql<boolean>`${taxSubjects.encryptedRsin} is not null`,
+        role: taxClientSubjects.role,
+        accessStatus: taxClientSubjects.accessStatus,
+      })
+      .from(taxClientSubjects)
+      .innerJoin(taxSubjects, eq(taxSubjects.id, taxClientSubjects.subjectId))
+      .where(eq(taxClientSubjects.clientId, client.id)),
+    db
+      .select({
+        id: taxSubjectRelationships.id,
+        primarySubjectId: taxSubjectRelationships.primarySubjectId,
+        relatedSubjectId: taxSubjectRelationships.relatedSubjectId,
+        relationshipType: taxSubjectRelationships.relationshipType,
+        fiscalPartner: taxSubjectRelationships.fiscalPartner,
+        status: taxSubjectRelationships.status,
+        validFrom: taxSubjectRelationships.validFrom,
+        validTo: taxSubjectRelationships.validTo,
+        createdAt: taxSubjectRelationships.createdAt,
+      })
+      .from(taxSubjectRelationships)
+      .where(eq(taxSubjectRelationships.clientId, client.id))
+      .orderBy(desc(taxSubjectRelationships.createdAt)),
+    db
+      .select({
+        id: taxEntitlements.id,
+        status: taxEntitlements.status,
+        source: taxEntitlements.source,
+        productCode: taxServiceProducts.code,
+        productName: taxServiceProducts.name,
+      })
+      .from(taxEntitlements)
+      .innerJoin(
+        taxServiceProducts,
+        eq(taxServiceProducts.id, taxEntitlements.productId),
+      )
+      .where(eq(taxEntitlements.clientId, client.id)),
+    db
+      .select({
+        id: taxMandates.id,
+        subjectId: taxMandates.subjectId,
+        entitlementId: taxMandates.entitlementId,
+        mandateType: taxMandates.mandateType,
+        status: taxMandates.status,
+        taxYear: taxMandates.taxYear,
+        requestedAt: taxMandates.requestedAt,
+        activatedAt: taxMandates.activatedAt,
+        expiresAt: taxMandates.expiresAt,
+      })
+      .from(taxMandates)
+      .where(eq(taxMandates.clientId, client.id)),
+    db
+      .select({
+        id: taxTasks.id,
+        subjectId: taxTasks.subjectId,
+        mandateId: taxTasks.mandateId,
+        title: taxTasks.title,
+        description: taxTasks.description,
+        status: taxTasks.status,
+        dueDate: taxTasks.dueDate,
+        createdAt: taxTasks.createdAt,
+        resolvedAt: taxTasks.resolvedAt,
+      })
+      .from(taxTasks)
+      .where(eq(taxTasks.clientId, client.id)),
+    db
+      .select({
+        id: taxMandateDocumentMatches.id,
+        mandateId: taxMandateDocumentMatches.mandateId,
+        taskId: taxMandateDocumentMatches.taskId,
+        documentId: taxMandateDocumentMatches.documentId,
+        documentTitle: documents.title,
+        documentDate: documents.date,
+        filePathTokens: taxMandateDocumentMatches.filePathTokens,
+        mimetype: taxMandateDocumentMatches.mimetype,
+        status: taxMandateDocumentMatches.status,
+        extractedCodePreview: taxMandateDocumentMatches.extractedCodePreview,
+        extractedMandateType: taxMandateDocumentMatches.extractedMandateType,
+        extractedTaxYear: taxMandateDocumentMatches.extractedTaxYear,
+        extractionConfidence: taxMandateDocumentMatches.extractionConfidence,
+        extractionReason: taxMandateDocumentMatches.extractionReason,
+        matchedAt: taxMandateDocumentMatches.matchedAt,
+        confirmedAt: taxMandateDocumentMatches.confirmedAt,
+        createdAt: taxMandateDocumentMatches.createdAt,
+      })
+      .from(taxMandateDocumentMatches)
+      .leftJoin(
+        documents,
+        eq(documents.id, taxMandateDocumentMatches.documentId),
+      )
+      .where(eq(taxMandateDocumentMatches.clientId, client.id)),
+  ]);
 
   const digipoortJobs = await db
     .select({
@@ -338,6 +362,7 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
   return {
     ...client,
     subjects,
+    subjectRelationships,
     entitlements,
     mandates,
     tasks,
@@ -849,6 +874,238 @@ export async function updateTaxSubjectIdentityForTeam(
   }
 
   return subject;
+}
+
+export async function upsertTaxPartnerRelationshipForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    primarySubjectId: string;
+    relationshipId?: string;
+    relatedSubjectId?: string;
+    partnerDisplayName: string;
+    partnerCountryCode?: string;
+    relationshipType: TaxSubjectRelationshipType;
+    fiscalPartner: boolean;
+    validFrom?: string | null;
+    validTo?: string | null;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const now = new Date().toISOString();
+    const [primaryLink] = await tx
+      .select({
+        clientId: taxClientSubjects.clientId,
+        subjectId: taxClientSubjects.subjectId,
+        countryCode: taxSubjects.countryCode,
+      })
+      .from(taxClientSubjects)
+      .innerJoin(taxSubjects, eq(taxSubjects.id, taxClientSubjects.subjectId))
+      .where(
+        and(
+          eq(taxClientSubjects.teamId, params.teamId),
+          eq(taxClientSubjects.subjectId, params.primarySubjectId),
+          eq(taxClientSubjects.accessStatus, "active"),
+        ),
+      )
+      .limit(1);
+
+    if (!primaryLink) {
+      throw new Error("Primary tax subject not found for this team");
+    }
+
+    const [existingRelationship] = params.relationshipId
+      ? await tx
+          .select()
+          .from(taxSubjectRelationships)
+          .where(
+            and(
+              eq(taxSubjectRelationships.id, params.relationshipId),
+              eq(taxSubjectRelationships.teamId, params.teamId),
+              eq(taxSubjectRelationships.clientId, primaryLink.clientId),
+            ),
+          )
+          .limit(1)
+      : await tx
+          .select()
+          .from(taxSubjectRelationships)
+          .where(
+            and(
+              eq(taxSubjectRelationships.clientId, primaryLink.clientId),
+              eq(
+                taxSubjectRelationships.primarySubjectId,
+                params.primarySubjectId,
+              ),
+              eq(taxSubjectRelationships.status, "active"),
+            ),
+          )
+          .orderBy(desc(taxSubjectRelationships.createdAt))
+          .limit(1);
+
+    const partnerCountryCode =
+      params.partnerCountryCode?.trim().toUpperCase() ||
+      primaryLink.countryCode ||
+      "NL";
+    let relatedSubjectId =
+      params.relatedSubjectId ?? existingRelationship?.relatedSubjectId;
+
+    if (relatedSubjectId) {
+      const [relatedLink] = await tx
+        .select({
+          id: taxClientSubjects.id,
+        })
+        .from(taxClientSubjects)
+        .where(
+          and(
+            eq(taxClientSubjects.clientId, primaryLink.clientId),
+            eq(taxClientSubjects.subjectId, relatedSubjectId),
+          ),
+        )
+        .limit(1);
+
+      if (!relatedLink) {
+        throw new Error("Partner tax subject is not linked to this team");
+      }
+
+      await tx
+        .update(taxSubjects)
+        .set({
+          displayName: params.partnerDisplayName.trim(),
+          countryCode: partnerCountryCode,
+          updatedAt: now,
+        })
+        .where(eq(taxSubjects.id, relatedSubjectId));
+
+      await tx
+        .update(taxClientSubjects)
+        .set({
+          role: "partner",
+          accessStatus: "active",
+          updatedAt: now,
+        })
+        .where(eq(taxClientSubjects.id, relatedLink.id));
+    } else {
+      const [partnerSubject] = await tx
+        .insert(taxSubjects)
+        .values({
+          subjectType: "private_person",
+          displayName: params.partnerDisplayName.trim(),
+          countryCode: partnerCountryCode,
+        })
+        .returning({ id: taxSubjects.id });
+
+      if (!partnerSubject) {
+        throw new Error("Failed to create partner tax subject");
+      }
+
+      relatedSubjectId = partnerSubject.id;
+
+      await tx.insert(taxClientSubjects).values({
+        clientId: primaryLink.clientId,
+        teamId: params.teamId,
+        subjectId: relatedSubjectId,
+        role: "partner",
+        accessStatus: "active",
+      });
+    }
+
+    const relationshipValues = {
+      primarySubjectId: params.primarySubjectId,
+      relatedSubjectId,
+      relationshipType: params.relationshipType,
+      fiscalPartner: params.fiscalPartner,
+      status: "active" as const,
+      validFrom: params.validFrom || null,
+      validTo: params.validTo || null,
+      updatedAt: now,
+    };
+
+    const [relationship] = existingRelationship
+      ? await tx
+          .update(taxSubjectRelationships)
+          .set(relationshipValues)
+          .where(eq(taxSubjectRelationships.id, existingRelationship.id))
+          .returning()
+      : await tx
+          .insert(taxSubjectRelationships)
+          .values({
+            clientId: primaryLink.clientId,
+            teamId: params.teamId,
+            ...relationshipValues,
+          })
+          .returning();
+
+    if (!relationship) {
+      throw new Error("Failed to save tax partner relationship");
+    }
+
+    return relationship;
+  });
+}
+
+export async function endTaxPartnerRelationshipForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    relationshipId: string;
+    validTo?: string | null;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const now = new Date().toISOString();
+    const endedOn = params.validTo || now.slice(0, 10);
+
+    const [existingRelationship] = await tx
+      .select({
+        id: taxSubjectRelationships.id,
+        clientId: taxSubjectRelationships.clientId,
+        relatedSubjectId: taxSubjectRelationships.relatedSubjectId,
+      })
+      .from(taxSubjectRelationships)
+      .where(
+        and(
+          eq(taxSubjectRelationships.id, params.relationshipId),
+          eq(taxSubjectRelationships.teamId, params.teamId),
+        ),
+      )
+      .limit(1);
+
+    if (!existingRelationship) {
+      throw new Error("Tax partner relationship not found for this team");
+    }
+
+    const [relationship] = await tx
+      .update(taxSubjectRelationships)
+      .set({
+        status: "ended",
+        validTo: endedOn,
+        updatedAt: now,
+      })
+      .where(eq(taxSubjectRelationships.id, existingRelationship.id))
+      .returning();
+
+    await tx
+      .update(taxClientSubjects)
+      .set({
+        accessStatus: "view_only",
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(taxClientSubjects.clientId, existingRelationship.clientId),
+          eq(
+            taxClientSubjects.subjectId,
+            existingRelationship.relatedSubjectId,
+          ),
+        ),
+      );
+
+    if (!relationship) {
+      throw new Error("Failed to end tax partner relationship");
+    }
+
+    return relationship;
+  });
 }
 
 export async function queueTaxDigipoortMandateActivation(
