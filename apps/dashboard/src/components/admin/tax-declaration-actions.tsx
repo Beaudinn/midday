@@ -31,10 +31,26 @@ type DeclarationStatus =
   | "rejected"
   | "cancelled";
 
+const declarationLabels: Record<DeclarationType, string> = {
+  income_tax_private: "IB private",
+  income_tax_entrepreneur: "IB entrepreneur",
+  vat_return: "VAT return",
+};
+
 function defaultDeclarationType(workspaceType: WorkspaceType): DeclarationType {
   return workspaceType === "business"
     ? "income_tax_entrepreneur"
     : "income_tax_private";
+}
+
+function declarationTypesForWorkspace(
+  workspaceType: WorkspaceType,
+): DeclarationType[] {
+  if (workspaceType !== "business") {
+    return ["income_tax_private"];
+  }
+
+  return ["income_tax_entrepreneur", "vat_return"];
 }
 
 function normalizeOptional(value: string) {
@@ -101,6 +117,7 @@ export function AdminTaxDeclarationCreateAction({
   const [periodEnd, setPeriodEnd] = useState("");
   const [deadlineDate, setDeadlineDate] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const declarationOptions = declarationTypesForWorkspace(workspaceType);
 
   const createMutation = useMutation(
     trpc.admin.createTaxDeclaration.mutationOptions({
@@ -142,11 +159,11 @@ export function AdminTaxDeclarationCreateAction({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="income_tax_private">IB private</SelectItem>
-          <SelectItem value="income_tax_entrepreneur">
-            IB entrepreneur
-          </SelectItem>
-          <SelectItem value="vat_return">VAT return</SelectItem>
+          {declarationOptions.map((option) => (
+            <SelectItem key={option} value={option}>
+              {declarationLabels[option]}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
 

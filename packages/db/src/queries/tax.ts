@@ -228,6 +228,31 @@ function isIncomeTaxDeclaration(declarationType: TaxDeclarationType) {
   );
 }
 
+function isDeclarationTypeAllowedForWorkspace(
+  workspaceType: "business" | "personal" | "household",
+  declarationType: TaxDeclarationType,
+) {
+  if (workspaceType !== "business") {
+    return declarationType === "income_tax_private";
+  }
+
+  return (
+    declarationType === "income_tax_entrepreneur" ||
+    declarationType === "vat_return"
+  );
+}
+
+function isDeclarationTypeAllowedForClientKind(
+  clientKind: TaxClientKind,
+  declarationType: TaxDeclarationType,
+) {
+  if (clientKind === "private_person" || clientKind === "household") {
+    return declarationType === "income_tax_private";
+  }
+
+  return true;
+}
+
 function declarationTaskTitle(declarationType: TaxDeclarationType) {
   return isIncomeTaxDeclaration(declarationType)
     ? "Prepare income tax declaration"
@@ -1239,17 +1264,44 @@ export async function createTaxDeclarationForTeam(
     throw new Error("VAT return declarations require a period start and end");
   }
 
-  const [existingClient] = await db
-    .select({ clientKind: taxClients.clientKind })
-    .from(taxClients)
-    .where(eq(taxClients.teamId, params.teamId))
+  const [profile] = await db
+    .select({
+      workspaceType: teams.workspaceType,
+      clientKind: taxClients.clientKind,
+    })
+    .from(teams)
+    .leftJoin(taxClients, eq(taxClients.teamId, teams.id))
+    .where(eq(teams.id, params.teamId))
     .limit(1);
+
+  if (!profile) {
+    throw new Error("Team not found");
+  }
+
+  if (
+    !isDeclarationTypeAllowedForWorkspace(
+      profile.workspaceType,
+      params.declarationType,
+    )
+  ) {
+    throw new Error("Declaration type is not available for this workspace");
+  }
+
+  if (
+    profile.clientKind &&
+    !isDeclarationTypeAllowedForClientKind(
+      profile.clientKind,
+      params.declarationType,
+    )
+  ) {
+    throw new Error("Declaration type is not available for this tax client");
+  }
 
   const activation = await activateTaxServiceForTeam(db, {
     teamId: params.teamId,
     productCode: productCodeForDeclarationType(params.declarationType),
     clientKind:
-      existingClient?.clientKind ??
+      profile.clientKind ??
       params.clientKind ??
       clientKindForDeclarationType(params.declarationType),
     staffUserId: params.staffUserId,
