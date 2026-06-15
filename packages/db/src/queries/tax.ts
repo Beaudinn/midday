@@ -5,9 +5,12 @@ import {
   documents,
   taxClientSubjects,
   taxClients,
+  taxDeclarationIntakes,
   taxDeclarations,
   taxDigipoortJobs,
   taxEntitlements,
+  taxIntakeAnswers,
+  taxIntakeDocuments,
   taxMandateDocumentMatches,
   taxMandates,
   taxServiceOrders,
@@ -18,6 +21,13 @@ import {
   teams,
   usersOnTeam,
 } from "../schema";
+import {
+  flattenTaxIntakeQuestions,
+  getTaxIntakeProgress,
+  getTaxIntakeTemplate,
+  normalizeTaxIntakeAnswerValue,
+  type TaxIntakeSubjectScope,
+} from "../utils/tax-intake";
 
 export type TaxClientKind = typeof taxClients.$inferSelect.clientKind;
 export type TaxServiceProductCode =
@@ -34,6 +44,30 @@ export type TaxSubjectRelationshipType =
 export type TaxDeclarationType =
   typeof taxDeclarations.$inferSelect.declarationType;
 export type TaxDeclarationStatus = typeof taxDeclarations.$inferSelect.status;
+export type TaxEntitlementSource = typeof taxEntitlements.$inferSelect.source;
+export type TaxServiceOrderStatus = typeof taxServiceOrders.$inferSelect.status;
+export type TaxIntakeStatus = typeof taxDeclarationIntakes.$inferSelect.status;
+export type TaxIntakeAnswerSource = typeof taxIntakeAnswers.$inferSelect.source;
+export type TaxIntakeAnswerStatus = typeof taxIntakeAnswers.$inferSelect.status;
+export type TaxIntakeDocumentStatus =
+  typeof taxIntakeDocuments.$inferSelect.status;
+export type TaxIntakeDocumentExtraction = {
+  documentType?: string | null;
+  taxYear?: number | null;
+  sectionKey?: string | null;
+  subjectScope?: TaxIntakeSubjectScope | null;
+  confidence?: number | null;
+  reason?: string | null;
+  suggestedAnswers?: {
+    sectionKey: string;
+    questionKey: string;
+    subjectScope: TaxIntakeSubjectScope;
+    value: unknown;
+    confidence?: number | null;
+    reason?: string | null;
+  }[];
+  rawExtraction?: Record<string, unknown>;
+};
 export type TaxDigipoortJobExecutionContext = {
   job: typeof taxDigipoortJobs.$inferSelect;
   mandate: {
@@ -77,6 +111,14 @@ const openMandateStatuses = [
   "letter_sent",
   "activation_required",
 ] as const;
+const pendingTaxOrderStatuses: TaxServiceOrderStatus[] = ["draft", "ordered"];
+
+function includedInTeamPlan(
+  includedInPlans: string[] | null | undefined,
+  plan: string | null | undefined,
+) {
+  return Boolean(plan && includedInPlans?.includes(plan));
+}
 
 function toTaxMandateType(value: string): TaxMandateType | null {
   return taxMandateTypes.has(value as TaxMandateType)
@@ -228,6 +270,38 @@ function isIncomeTaxDeclaration(declarationType: TaxDeclarationType) {
   );
 }
 
+function getDeclarationIntakeTemplate(declarationType: TaxDeclarationType) {
+  if (!isIncomeTaxDeclaration(declarationType)) {
+    return null;
+  }
+
+  return getTaxIntakeTemplate(declarationType);
+}
+
+function intakeTaskTitle(declarationType: TaxDeclarationType) {
+  return isIncomeTaxDeclaration(declarationType)
+    ? "Complete income tax intake"
+    : "Complete tax intake";
+}
+
+function clampConfidence(confidence?: number | null) {
+  if (confidence === null || confidence === undefined) {
+    return null;
+  }
+
+  if (confidence <= 1) {
+    return confidencePercent(confidence);
+  }
+
+  return Math.max(0, Math.min(100, Math.round(confidence)));
+}
+
+function asObject(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 function isDeclarationTypeAllowedForWorkspace(
   workspaceType: "business" | "personal" | "household",
   declarationType: TaxDeclarationType,
@@ -332,6 +406,7 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     subjects,
     subjectRelationships,
     entitlements,
+    serviceOrders,
     declarations,
     mandates,
     tasks,
@@ -384,6 +459,28 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
       .where(eq(taxEntitlements.clientId, client.id)),
     db
       .select({
+        id: taxServiceOrders.id,
+        productId: taxServiceOrders.productId,
+        productCode: taxServiceProducts.code,
+        productName: taxServiceProducts.name,
+        polarProductId: taxServiceProducts.polarProductId,
+        taxYear: taxServiceOrders.taxYear,
+        period: taxServiceOrders.period,
+        polarOrderId: taxServiceOrders.polarOrderId,
+        status: taxServiceOrders.status,
+        orderedAt: taxServiceOrders.orderedAt,
+        createdAt: taxServiceOrders.createdAt,
+        updatedAt: taxServiceOrders.updatedAt,
+      })
+      .from(taxServiceOrders)
+      .innerJoin(
+        taxServiceProducts,
+        eq(taxServiceProducts.id, taxServiceOrders.productId),
+      )
+      .where(eq(taxServiceOrders.clientId, client.id))
+      .orderBy(desc(taxServiceOrders.createdAt)),
+    db
+      .select({
         id: taxDeclarations.id,
         subjectId: taxDeclarations.subjectId,
         partnerSubjectId: taxDeclarations.partnerSubjectId,
@@ -424,6 +521,9 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
         id: taxTasks.id,
         subjectId: taxTasks.subjectId,
         mandateId: taxTasks.mandateId,
+        declarationId: taxTasks.declarationId,
+        intakeId: taxTasks.intakeId,
+        questionKey: taxTasks.questionKey,
         title: taxTasks.title,
         description: taxTasks.description,
         status: taxTasks.status,
@@ -481,16 +581,912 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     .orderBy(desc(taxDigipoortJobs.createdAt))
     .limit(25);
 
+  const intakes = await db
+    .select({
+      id: taxDeclarationIntakes.id,
+      declarationId: taxDeclarationIntakes.declarationId,
+      templateKey: taxDeclarationIntakes.templateKey,
+      templateVersion: taxDeclarationIntakes.templateVersion,
+      status: taxDeclarationIntakes.status,
+      submittedAt: taxDeclarationIntakes.submittedAt,
+      reviewedAt: taxDeclarationIntakes.reviewedAt,
+      acceptedAt: taxDeclarationIntakes.acceptedAt,
+      updatedAt: taxDeclarationIntakes.updatedAt,
+    })
+    .from(taxDeclarationIntakes)
+    .where(eq(taxDeclarationIntakes.clientId, client.id));
+
+  const intakeAnswers = intakes.length
+    ? await db
+        .select({
+          intakeId: taxIntakeAnswers.intakeId,
+          questionKey: taxIntakeAnswers.questionKey,
+          subjectScope: taxIntakeAnswers.subjectScope,
+          value: taxIntakeAnswers.value,
+          status: taxIntakeAnswers.status,
+        })
+        .from(taxIntakeAnswers)
+        .where(
+          inArray(
+            taxIntakeAnswers.intakeId,
+            intakes.map((intake) => intake.id),
+          ),
+        )
+    : [];
+
+  const answersByIntakeId = new Map<
+    string,
+    {
+      questionKey: string;
+      subjectScope: TaxIntakeSubjectScope;
+      value: unknown;
+      status: TaxIntakeAnswerStatus;
+    }[]
+  >();
+
+  for (const answer of intakeAnswers) {
+    const entries = answersByIntakeId.get(answer.intakeId) ?? [];
+    entries.push(answer);
+    answersByIntakeId.set(answer.intakeId, entries);
+  }
+
+  const intakesByDeclarationId = new Map(
+    intakes.map((intake) => {
+      const declaration = declarations.find(
+        (item) => item.id === intake.declarationId,
+      );
+      const template = declaration
+        ? getDeclarationIntakeTemplate(declaration.declarationType)
+        : null;
+
+      return [
+        intake.declarationId,
+        {
+          ...intake,
+          progress: template
+            ? getTaxIntakeProgress(
+                template,
+                answersByIntakeId.get(intake.id) ?? [],
+              )
+            : null,
+        },
+      ];
+    }),
+  );
+
+  const declarationsWithIntakes = declarations.map((declaration) => ({
+    ...declaration,
+    intake: intakesByDeclarationId.get(declaration.id) ?? null,
+  }));
+
   return {
     ...client,
     subjects,
     subjectRelationships,
     entitlements,
-    declarations,
+    serviceOrders,
+    declarations: declarationsWithIntakes,
     mandates,
     tasks,
     documentMatches,
     digipoortJobs,
+  };
+}
+
+export async function getTaxDeclarationIntakeForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    declarationId?: string;
+    intakeId?: string;
+  },
+) {
+  const filters = [eq(taxDeclarationIntakes.teamId, params.teamId)];
+
+  if (params.declarationId) {
+    filters.push(eq(taxDeclarationIntakes.declarationId, params.declarationId));
+  }
+
+  if (params.intakeId) {
+    filters.push(eq(taxDeclarationIntakes.id, params.intakeId));
+  }
+
+  const [row] = await db
+    .select({
+      intakeId: taxDeclarationIntakes.id,
+      declarationId: taxDeclarationIntakes.declarationId,
+      clientId: taxDeclarationIntakes.clientId,
+      teamId: taxDeclarationIntakes.teamId,
+      subjectId: taxDeclarationIntakes.subjectId,
+      partnerSubjectId: taxDeclarationIntakes.partnerSubjectId,
+      templateKey: taxDeclarationIntakes.templateKey,
+      templateVersion: taxDeclarationIntakes.templateVersion,
+      intakeStatus: taxDeclarationIntakes.status,
+      submittedAt: taxDeclarationIntakes.submittedAt,
+      reviewedAt: taxDeclarationIntakes.reviewedAt,
+      acceptedAt: taxDeclarationIntakes.acceptedAt,
+      intakeMetadata: taxDeclarationIntakes.metadata,
+      intakeCreatedAt: taxDeclarationIntakes.createdAt,
+      intakeUpdatedAt: taxDeclarationIntakes.updatedAt,
+      declarationType: taxDeclarations.declarationType,
+      taxYear: taxDeclarations.taxYear,
+      period: taxDeclarations.period,
+      periodStart: taxDeclarations.periodStart,
+      periodEnd: taxDeclarations.periodEnd,
+      deadlineDate: taxDeclarations.deadlineDate,
+      declarationStatus: taxDeclarations.status,
+      approvedAt: taxDeclarations.approvedAt,
+      submittedDeclarationAt: taxDeclarations.submittedAt,
+      providerReference: taxDeclarations.providerReference,
+      declarationCreatedAt: taxDeclarations.createdAt,
+    })
+    .from(taxDeclarationIntakes)
+    .innerJoin(
+      taxDeclarations,
+      eq(taxDeclarations.id, taxDeclarationIntakes.declarationId),
+    )
+    .where(and(...filters))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  const template = getDeclarationIntakeTemplate(row.declarationType);
+
+  if (!template) {
+    return null;
+  }
+
+  const [answers, intakeDocuments, tasks] = await Promise.all([
+    db
+      .select({
+        id: taxIntakeAnswers.id,
+        intakeId: taxIntakeAnswers.intakeId,
+        declarationId: taxIntakeAnswers.declarationId,
+        documentId: taxIntakeAnswers.documentId,
+        documentTitle: documents.title,
+        documentDate: documents.date,
+        documentPathTokens: documents.pathTokens,
+        sectionKey: taxIntakeAnswers.sectionKey,
+        questionKey: taxIntakeAnswers.questionKey,
+        subjectScope: taxIntakeAnswers.subjectScope,
+        value: taxIntakeAnswers.value,
+        source: taxIntakeAnswers.source,
+        confidence: taxIntakeAnswers.confidence,
+        status: taxIntakeAnswers.status,
+        reviewedByStaffUserId: taxIntakeAnswers.reviewedByStaffUserId,
+        reviewedAt: taxIntakeAnswers.reviewedAt,
+        createdAt: taxIntakeAnswers.createdAt,
+        updatedAt: taxIntakeAnswers.updatedAt,
+      })
+      .from(taxIntakeAnswers)
+      .leftJoin(documents, eq(documents.id, taxIntakeAnswers.documentId))
+      .where(eq(taxIntakeAnswers.intakeId, row.intakeId))
+      .orderBy(desc(taxIntakeAnswers.updatedAt)),
+    db
+      .select({
+        id: taxIntakeDocuments.id,
+        intakeId: taxIntakeDocuments.intakeId,
+        declarationId: taxIntakeDocuments.declarationId,
+        documentId: taxIntakeDocuments.documentId,
+        documentTitle: documents.title,
+        documentDate: documents.date,
+        documentPathTokens: documents.pathTokens,
+        documentType: taxIntakeDocuments.documentType,
+        taxYear: taxIntakeDocuments.taxYear,
+        sectionKey: taxIntakeDocuments.sectionKey,
+        subjectScope: taxIntakeDocuments.subjectScope,
+        confidence: taxIntakeDocuments.confidence,
+        status: taxIntakeDocuments.status,
+        redactedExtraction: taxIntakeDocuments.redactedExtraction,
+        createdAt: taxIntakeDocuments.createdAt,
+        updatedAt: taxIntakeDocuments.updatedAt,
+      })
+      .from(taxIntakeDocuments)
+      .innerJoin(documents, eq(documents.id, taxIntakeDocuments.documentId))
+      .where(eq(taxIntakeDocuments.intakeId, row.intakeId))
+      .orderBy(desc(taxIntakeDocuments.updatedAt)),
+    db
+      .select({
+        id: taxTasks.id,
+        subjectId: taxTasks.subjectId,
+        declarationId: taxTasks.declarationId,
+        intakeId: taxTasks.intakeId,
+        questionKey: taxTasks.questionKey,
+        title: taxTasks.title,
+        description: taxTasks.description,
+        status: taxTasks.status,
+        dueDate: taxTasks.dueDate,
+        createdAt: taxTasks.createdAt,
+        resolvedAt: taxTasks.resolvedAt,
+      })
+      .from(taxTasks)
+      .where(eq(taxTasks.intakeId, row.intakeId))
+      .orderBy(desc(taxTasks.createdAt)),
+  ]);
+
+  const progress = getTaxIntakeProgress(template, answers);
+
+  return {
+    declaration: {
+      id: row.declarationId,
+      clientId: row.clientId,
+      teamId: row.teamId,
+      subjectId: row.subjectId,
+      partnerSubjectId: row.partnerSubjectId,
+      declarationType: row.declarationType,
+      taxYear: row.taxYear,
+      period: row.period,
+      periodStart: row.periodStart,
+      periodEnd: row.periodEnd,
+      deadlineDate: row.deadlineDate,
+      status: row.declarationStatus,
+      approvedAt: row.approvedAt,
+      submittedAt: row.submittedDeclarationAt,
+      providerReference: row.providerReference,
+      createdAt: row.declarationCreatedAt,
+    },
+    intake: {
+      id: row.intakeId,
+      declarationId: row.declarationId,
+      clientId: row.clientId,
+      teamId: row.teamId,
+      subjectId: row.subjectId,
+      partnerSubjectId: row.partnerSubjectId,
+      templateKey: row.templateKey,
+      templateVersion: row.templateVersion,
+      status: row.intakeStatus,
+      submittedAt: row.submittedAt,
+      reviewedAt: row.reviewedAt,
+      acceptedAt: row.acceptedAt,
+      metadata: row.intakeMetadata,
+      createdAt: row.intakeCreatedAt,
+      updatedAt: row.intakeUpdatedAt,
+    },
+    template,
+    answers,
+    documents: intakeDocuments,
+    tasks,
+    progress,
+  };
+}
+
+async function getRequiredTaxIntakeForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    intakeId?: string;
+    declarationId?: string;
+  },
+) {
+  const detail = await getTaxDeclarationIntakeForTeam(db, params);
+
+  if (!detail) {
+    throw new Error("Tax declaration intake not found");
+  }
+
+  return detail;
+}
+
+export async function upsertTaxIntakeAnswerForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    intakeId: string;
+    sectionKey: string;
+    questionKey: string;
+    subjectScope: TaxIntakeSubjectScope;
+    value: unknown;
+    source?: TaxIntakeAnswerSource;
+    status?: TaxIntakeAnswerStatus;
+    confidence?: number | null;
+    documentId?: string | null;
+    userId?: string | null;
+  },
+) {
+  const detail = await getRequiredTaxIntakeForTeam(db, {
+    teamId: params.teamId,
+    intakeId: params.intakeId,
+  });
+  const source = params.source ?? "client";
+  const status =
+    params.status ?? (source === "document_ai" ? "suggested" : "confirmed");
+  const now = new Date().toISOString();
+
+  const [answer] = await db
+    .insert(taxIntakeAnswers)
+    .values({
+      intakeId: detail.intake.id,
+      declarationId: detail.declaration.id,
+      clientId: detail.intake.clientId,
+      teamId: params.teamId,
+      documentId: params.documentId ?? null,
+      sectionKey: params.sectionKey,
+      questionKey: params.questionKey,
+      subjectScope: params.subjectScope,
+      value: normalizeTaxIntakeAnswerValue(params.value),
+      source,
+      confidence: clampConfidence(params.confidence),
+      status,
+      createdByUserId: params.userId ?? null,
+      updatedByUserId: params.userId ?? null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        taxIntakeAnswers.intakeId,
+        taxIntakeAnswers.questionKey,
+        taxIntakeAnswers.subjectScope,
+        taxIntakeAnswers.source,
+      ],
+      set: {
+        documentId: params.documentId ?? null,
+        sectionKey: params.sectionKey,
+        value: normalizeTaxIntakeAnswerValue(params.value),
+        confidence: clampConfidence(params.confidence),
+        status,
+        updatedByUserId: params.userId ?? null,
+        updatedAt: now,
+      },
+    })
+    .returning();
+
+  await db
+    .update(taxDeclarationIntakes)
+    .set({
+      status: ["not_started", "needs_info"].includes(detail.intake.status)
+        ? "in_progress"
+        : detail.intake.status,
+      updatedAt: now,
+    })
+    .where(eq(taxDeclarationIntakes.id, detail.intake.id));
+
+  await db
+    .update(taxDeclarations)
+    .set({
+      status:
+        detail.declaration.status === "draft"
+          ? "collecting"
+          : detail.declaration.status,
+      updatedAt: now,
+    })
+    .where(eq(taxDeclarations.id, detail.declaration.id));
+
+  if (!answer) {
+    throw new Error("Failed to save tax intake answer");
+  }
+
+  return answer;
+}
+
+export async function updateTaxIntakeAnswerStatusForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    answerId: string;
+    status: TaxIntakeAnswerStatus;
+    staffUserId?: string | null;
+  },
+) {
+  const now = new Date().toISOString();
+  const [answer] = await db
+    .update(taxIntakeAnswers)
+    .set({
+      status: params.status,
+      reviewedByStaffUserId: params.staffUserId ?? null,
+      reviewedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(taxIntakeAnswers.id, params.answerId),
+        eq(taxIntakeAnswers.teamId, params.teamId),
+      ),
+    )
+    .returning();
+
+  if (!answer) {
+    throw new Error("Tax intake answer not found");
+  }
+
+  return answer;
+}
+
+export async function linkTaxDocumentToIntakeForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    intakeId: string;
+    documentId: string;
+    sectionKey: string;
+    subjectScope?: TaxIntakeSubjectScope;
+    documentType?: string | null;
+    taxYear?: number | null;
+    confidence?: number | null;
+    status?: TaxIntakeDocumentStatus;
+    rawExtraction?: Record<string, unknown>;
+    redactedExtraction?: Record<string, unknown>;
+  },
+) {
+  const detail = await getRequiredTaxIntakeForTeam(db, {
+    teamId: params.teamId,
+    intakeId: params.intakeId,
+  });
+  const [document] = await db
+    .select({
+      id: documents.id,
+    })
+    .from(documents)
+    .where(
+      and(
+        eq(documents.id, params.documentId),
+        eq(documents.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+
+  if (!document) {
+    throw new Error("Document not found");
+  }
+
+  const now = new Date().toISOString();
+  const [intakeDocument] = await db
+    .insert(taxIntakeDocuments)
+    .values({
+      intakeId: detail.intake.id,
+      declarationId: detail.declaration.id,
+      clientId: detail.intake.clientId,
+      teamId: params.teamId,
+      documentId: params.documentId,
+      documentType: params.documentType ?? null,
+      taxYear: params.taxYear ?? detail.declaration.taxYear,
+      sectionKey: params.sectionKey,
+      subjectScope: params.subjectScope ?? "primary",
+      confidence: clampConfidence(params.confidence),
+      status: params.status ?? "linked",
+      rawExtraction: params.rawExtraction ?? {},
+      redactedExtraction: params.redactedExtraction ?? {},
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        taxIntakeDocuments.intakeId,
+        taxIntakeDocuments.documentId,
+        taxIntakeDocuments.sectionKey,
+      ],
+      set: {
+        documentType: params.documentType ?? null,
+        taxYear: params.taxYear ?? detail.declaration.taxYear,
+        subjectScope: params.subjectScope ?? "primary",
+        confidence: clampConfidence(params.confidence),
+        status: params.status ?? "linked",
+        rawExtraction: params.rawExtraction ?? {},
+        redactedExtraction: params.redactedExtraction ?? {},
+        updatedAt: now,
+      },
+    })
+    .returning();
+
+  if (!intakeDocument) {
+    throw new Error("Failed to link document to tax intake");
+  }
+
+  return intakeDocument;
+}
+
+export async function submitTaxIntakeForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    intakeId: string;
+  },
+) {
+  const detail = await getRequiredTaxIntakeForTeam(db, params);
+
+  if (detail.progress.missingRequired > 0) {
+    throw new Error("Complete all required intake questions before submitting");
+  }
+
+  const now = new Date().toISOString();
+
+  return db.transaction(async (tx) => {
+    const [intake] = await tx
+      .update(taxDeclarationIntakes)
+      .set({
+        status: "submitted",
+        submittedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(taxDeclarationIntakes.id, detail.intake.id))
+      .returning();
+
+    await tx
+      .update(taxDeclarations)
+      .set({
+        status: "ready_for_review",
+        updatedAt: now,
+      })
+      .where(eq(taxDeclarations.id, detail.declaration.id));
+
+    await tx
+      .update(taxTasks)
+      .set({
+        status: "answered",
+        updatedAt: now,
+        resolvedAt: now,
+      })
+      .where(
+        and(
+          eq(taxTasks.intakeId, detail.intake.id),
+          eq(taxTasks.status, "open"),
+        ),
+      );
+
+    if (!intake) {
+      throw new Error("Failed to submit tax intake");
+    }
+
+    return intake;
+  });
+}
+
+export async function requestTaxIntakeInfoForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    intakeId: string;
+    questionKey: string;
+    title: string;
+    description?: string | null;
+    staffUserId?: string | null;
+  },
+) {
+  const detail = await getRequiredTaxIntakeForTeam(db, params);
+  const now = new Date().toISOString();
+  const [client] = await db
+    .select({
+      primaryUserId: taxClients.primaryUserId,
+      assignedStaffUserId: taxClients.assignedStaffUserId,
+    })
+    .from(taxClients)
+    .where(
+      and(
+        eq(taxClients.id, detail.intake.clientId),
+        eq(taxClients.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+
+  return db.transaction(async (tx) => {
+    const [task] = await tx
+      .insert(taxTasks)
+      .values({
+        clientId: detail.intake.clientId,
+        teamId: params.teamId,
+        subjectId: detail.intake.subjectId,
+        declarationId: detail.declaration.id,
+        intakeId: detail.intake.id,
+        questionKey: params.questionKey,
+        assignedToUserId: client?.primaryUserId ?? null,
+        assignedToStaffUserId:
+          params.staffUserId ?? client?.assignedStaffUserId ?? null,
+        title: params.title,
+        description: params.description ?? null,
+        status: "open",
+        dueDate: declarationTaskDueDate(detail.declaration.deadlineDate),
+      })
+      .returning();
+
+    await tx
+      .update(taxDeclarationIntakes)
+      .set({
+        status: "needs_info",
+        updatedAt: now,
+      })
+      .where(eq(taxDeclarationIntakes.id, detail.intake.id));
+
+    await tx
+      .update(taxDeclarations)
+      .set({
+        status: "collecting",
+        updatedAt: now,
+      })
+      .where(eq(taxDeclarations.id, detail.declaration.id));
+
+    await tx
+      .update(taxIntakeAnswers)
+      .set({
+        status: "needs_review",
+        reviewedByStaffUserId: params.staffUserId ?? null,
+        reviewedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(taxIntakeAnswers.intakeId, detail.intake.id),
+          eq(taxIntakeAnswers.questionKey, params.questionKey),
+        ),
+      );
+
+    if (!task) {
+      throw new Error("Failed to create tax intake task");
+    }
+
+    return task;
+  });
+}
+
+export async function acceptTaxIntakeForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    intakeId: string;
+    staffUserId?: string | null;
+  },
+) {
+  const detail = await getRequiredTaxIntakeForTeam(db, params);
+  const now = new Date().toISOString();
+  const metadata = asObject(detail.intake.metadata);
+
+  return db.transaction(async (tx) => {
+    const [intake] = await tx
+      .update(taxDeclarationIntakes)
+      .set({
+        status: "accepted",
+        reviewedAt: detail.intake.reviewedAt ?? now,
+        acceptedAt: now,
+        metadata: {
+          ...metadata,
+          acceptedByStaffUserId: params.staffUserId ?? null,
+        },
+        updatedAt: now,
+      })
+      .where(eq(taxDeclarationIntakes.id, detail.intake.id))
+      .returning();
+
+    await tx
+      .update(taxDeclarations)
+      .set({
+        status: "in_review",
+        updatedAt: now,
+      })
+      .where(eq(taxDeclarations.id, detail.declaration.id));
+
+    await tx
+      .update(taxTasks)
+      .set({
+        status: "resolved",
+        updatedAt: now,
+        resolvedAt: now,
+      })
+      .where(
+        and(
+          eq(taxTasks.intakeId, detail.intake.id),
+          inArray(taxTasks.status, ["open", "answered"]),
+        ),
+      );
+
+    if (!intake) {
+      throw new Error("Failed to accept tax intake");
+    }
+
+    return intake;
+  });
+}
+
+export async function getOpenTaxIntakeDocumentContextsForTeam(
+  db: Database,
+  teamId: string,
+) {
+  return db
+    .select({
+      intakeId: taxDeclarationIntakes.id,
+      declarationId: taxDeclarationIntakes.declarationId,
+      clientId: taxDeclarationIntakes.clientId,
+      teamId: taxDeclarationIntakes.teamId,
+      subjectId: taxDeclarationIntakes.subjectId,
+      declarationType: taxDeclarations.declarationType,
+      taxYear: taxDeclarations.taxYear,
+      status: taxDeclarationIntakes.status,
+    })
+    .from(taxDeclarationIntakes)
+    .innerJoin(
+      taxDeclarations,
+      eq(taxDeclarations.id, taxDeclarationIntakes.declarationId),
+    )
+    .where(
+      and(
+        eq(taxDeclarationIntakes.teamId, teamId),
+        inArray(taxDeclarationIntakes.status, [
+          "not_started",
+          "in_progress",
+          "needs_info",
+          "submitted",
+        ]),
+        inArray(taxDeclarations.declarationType, [
+          "income_tax_private",
+          "income_tax_entrepreneur",
+        ]),
+      ),
+    );
+}
+
+export async function getTaxDocumentForPath(
+  db: Database,
+  params: {
+    teamId: string;
+    filePathTokens: string[];
+  },
+) {
+  const [document] = await db
+    .select({
+      id: documents.id,
+      title: documents.title,
+      summary: documents.summary,
+      content: documents.content,
+      date: documents.date,
+      pathTokens: documents.pathTokens,
+      metadata: documents.metadata,
+    })
+    .from(documents)
+    .where(
+      and(
+        eq(documents.teamId, params.teamId),
+        eq(documents.pathTokens, params.filePathTokens),
+      ),
+    )
+    .limit(1);
+
+  return document ?? null;
+}
+
+export async function matchTaxIntakeDocument(
+  db: Database,
+  params: {
+    teamId: string;
+    filePathTokens: string[];
+    extraction: TaxIntakeDocumentExtraction;
+  },
+) {
+  const document = await getTaxDocumentForPath(db, {
+    teamId: params.teamId,
+    filePathTokens: params.filePathTokens,
+  });
+
+  if (!document) {
+    return { matched: false, reason: "Document not found." };
+  }
+
+  const openIntakes = await getOpenTaxIntakeDocumentContextsForTeam(
+    db,
+    params.teamId,
+  );
+
+  if (!openIntakes.length) {
+    return { matched: false, reason: "No open income tax intakes found." };
+  }
+
+  const candidates = params.extraction.taxYear
+    ? openIntakes.filter(
+        (intake) => intake.taxYear === params.extraction.taxYear,
+      )
+    : openIntakes;
+
+  if (!candidates.length) {
+    return {
+      matched: false,
+      reason: "No intake matched the document tax year.",
+    };
+  }
+
+  if (!params.extraction.taxYear && candidates.length > 1) {
+    return {
+      matched: false,
+      reason: "Multiple open intake years matched; tax year is required.",
+    };
+  }
+
+  const intake = candidates[0];
+
+  if (!intake) {
+    return { matched: false, reason: "No open intake matched." };
+  }
+
+  const template = getDeclarationIntakeTemplate(intake.declarationType);
+
+  if (!template) {
+    return { matched: false, reason: "Declaration has no intake template." };
+  }
+
+  const validQuestions = new Set(
+    flattenTaxIntakeQuestions(template).map((question) => question.key),
+  );
+  const suggestedAnswers = (params.extraction.suggestedAnswers ?? []).filter(
+    (answer) => validQuestions.has(answer.questionKey),
+  );
+
+  if (!params.extraction.sectionKey && !suggestedAnswers.length) {
+    return { matched: false, reason: "No tax intake facts extracted." };
+  }
+
+  const sectionKey =
+    params.extraction.sectionKey ?? suggestedAnswers.at(0)?.sectionKey;
+
+  if (!sectionKey) {
+    return { matched: false, reason: "No intake section extracted." };
+  }
+
+  const now = new Date().toISOString();
+  const [intakeDocument] = await db
+    .insert(taxIntakeDocuments)
+    .values({
+      intakeId: intake.intakeId,
+      declarationId: intake.declarationId,
+      clientId: intake.clientId,
+      teamId: params.teamId,
+      documentId: document.id,
+      documentType: params.extraction.documentType ?? null,
+      taxYear: params.extraction.taxYear ?? intake.taxYear,
+      sectionKey,
+      subjectScope: params.extraction.subjectScope ?? "primary",
+      confidence: clampConfidence(params.extraction.confidence),
+      status: "suggested",
+      rawExtraction: params.extraction.rawExtraction ?? {},
+      redactedExtraction: {
+        documentType: params.extraction.documentType ?? null,
+        taxYear: params.extraction.taxYear ?? intake.taxYear,
+        reason: params.extraction.reason ?? null,
+        suggestedAnswerCount: suggestedAnswers.length,
+      },
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        taxIntakeDocuments.intakeId,
+        taxIntakeDocuments.documentId,
+        taxIntakeDocuments.sectionKey,
+      ],
+      set: {
+        documentType: params.extraction.documentType ?? null,
+        taxYear: params.extraction.taxYear ?? intake.taxYear,
+        subjectScope: params.extraction.subjectScope ?? "primary",
+        confidence: clampConfidence(params.extraction.confidence),
+        status: "suggested",
+        rawExtraction: params.extraction.rawExtraction ?? {},
+        redactedExtraction: {
+          documentType: params.extraction.documentType ?? null,
+          taxYear: params.extraction.taxYear ?? intake.taxYear,
+          reason: params.extraction.reason ?? null,
+          suggestedAnswerCount: suggestedAnswers.length,
+        },
+        updatedAt: now,
+      },
+    })
+    .returning();
+
+  for (const answer of suggestedAnswers) {
+    await upsertTaxIntakeAnswerForTeam(db, {
+      teamId: params.teamId,
+      intakeId: intake.intakeId,
+      sectionKey: answer.sectionKey,
+      questionKey: answer.questionKey,
+      subjectScope: answer.subjectScope,
+      value: answer.value,
+      source: "document_ai",
+      status: "suggested",
+      confidence: answer.confidence ?? params.extraction.confidence,
+      documentId: document.id,
+    });
+  }
+
+  return {
+    matched: true,
+    intakeId: intake.intakeId,
+    declarationId: intake.declarationId,
+    documentId: document.id,
+    intakeDocument,
+    suggestedAnswerCount: suggestedAnswers.length,
   };
 }
 
@@ -1243,6 +2239,11 @@ export async function createTaxDeclarationForTeam(
     deadlineDate?: string | null;
     clientKind?: TaxClientKind;
     staffUserId?: string | null;
+    orderedByUserId?: string | null;
+    entitlementSource?: TaxEntitlementSource;
+    entitlementSourceRef?: string | null;
+    serviceOrderId?: string | null;
+    serviceOrderStatus?: TaxServiceOrderStatus;
   },
 ) {
   if (Boolean(params.periodStart) !== Boolean(params.periodEnd)) {
@@ -1305,6 +2306,8 @@ export async function createTaxDeclarationForTeam(
       params.clientKind ??
       clientKindForDeclarationType(params.declarationType),
     staffUserId: params.staffUserId,
+    entitlementSource: params.entitlementSource,
+    entitlementSourceRef: params.entitlementSourceRef,
   });
 
   return db.transaction(async (tx) => {
@@ -1379,35 +2382,100 @@ export async function createTaxDeclarationForTeam(
       .limit(1);
 
     if (existingDeclaration) {
+      const template = getDeclarationIntakeTemplate(
+        existingDeclaration.declarationType,
+      );
+      const [existingIntake] = template
+        ? await tx
+            .select()
+            .from(taxDeclarationIntakes)
+            .where(
+              eq(taxDeclarationIntakes.declarationId, existingDeclaration.id),
+            )
+            .limit(1)
+        : [null];
+      const [intake] =
+        template && !existingIntake
+          ? await tx
+              .insert(taxDeclarationIntakes)
+              .values({
+                declarationId: existingDeclaration.id,
+                clientId: existingDeclaration.clientId,
+                teamId: existingDeclaration.teamId,
+                subjectId: existingDeclaration.subjectId,
+                partnerSubjectId: existingDeclaration.partnerSubjectId,
+                templateKey: template.key,
+                templateVersion: template.version,
+                status: "not_started",
+                metadata: {
+                  createdFrom: "reuse_existing_declaration",
+                  taxYear: existingDeclaration.taxYear,
+                },
+              })
+              .returning()
+          : [existingIntake ?? null];
+
       return {
         declaration: existingDeclaration,
         serviceOrder: null,
         task: null,
+        intake,
         entitlement: activation.entitlement,
         product: activation.product,
         created: false,
       };
     }
 
-    const [serviceOrder] = await tx
-      .insert(taxServiceOrders)
-      .values({
-        clientId: activation.client.id,
-        teamId: params.teamId,
-        productId: activation.product.id,
-        taxYear: params.taxYear,
-        period: params.period ?? null,
-        status: "ordered",
-        createdByStaffUserId: params.staffUserId ?? null,
-      })
-      .returning();
+    const [existingServiceOrder] = params.serviceOrderId
+      ? await tx
+          .select()
+          .from(taxServiceOrders)
+          .where(
+            and(
+              eq(taxServiceOrders.id, params.serviceOrderId),
+              eq(taxServiceOrders.clientId, activation.client.id),
+              eq(taxServiceOrders.teamId, params.teamId),
+              eq(taxServiceOrders.productId, activation.product.id),
+            ),
+          )
+          .limit(1)
+      : [null];
+
+    if (params.serviceOrderId && !existingServiceOrder) {
+      throw new Error("Tax service order not found");
+    }
+
+    const [serviceOrder] = existingServiceOrder
+      ? await tx
+          .update(taxServiceOrders)
+          .set({
+            status: params.serviceOrderStatus ?? existingServiceOrder.status,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(taxServiceOrders.id, existingServiceOrder.id))
+          .returning()
+      : await tx
+          .insert(taxServiceOrders)
+          .values({
+            clientId: activation.client.id,
+            teamId: params.teamId,
+            productId: activation.product.id,
+            taxYear: params.taxYear,
+            period: params.period ?? null,
+            status: params.serviceOrderStatus ?? "ordered",
+            orderedByUserId: params.orderedByUserId ?? null,
+            createdByStaffUserId: params.staffUserId ?? null,
+          })
+          .returning();
 
     if (!serviceOrder) {
       throw new Error("Failed to create tax service order");
     }
 
+    const createdFrom = params.orderedByUserId ? "client_order" : "admin";
     const metadata = {
-      createdFrom: "admin",
+      createdFrom,
+      orderedByUserId: params.orderedByUserId ?? null,
       createdByStaffUserId: params.staffUserId ?? null,
       partnerSnapshot: activePartnerRelationship
         ? {
@@ -1445,23 +2513,52 @@ export async function createTaxDeclarationForTeam(
       throw new Error("Failed to create tax declaration");
     }
 
+    const template = getDeclarationIntakeTemplate(params.declarationType);
+    const [intake] = template
+      ? await tx
+          .insert(taxDeclarationIntakes)
+          .values({
+            declarationId: declaration.id,
+            clientId: activation.client.id,
+            teamId: params.teamId,
+            subjectId: subjectLink.subjectId,
+            partnerSubjectId:
+              activePartnerRelationship?.relatedSubjectId ?? null,
+            templateKey: template.key,
+            templateVersion: template.version,
+            status: "not_started",
+            metadata: {
+              createdFrom,
+              taxYear: params.taxYear,
+              orderedByUserId: params.orderedByUserId ?? null,
+            },
+          })
+          .returning()
+      : [null];
+
     const [task] = await tx
       .insert(taxTasks)
       .values({
         clientId: activation.client.id,
         teamId: params.teamId,
         subjectId: subjectLink.subjectId,
+        declarationId: declaration.id,
+        intakeId: intake?.id ?? null,
         assignedToUserId: activation.client.primaryUserId,
         assignedToStaffUserId:
           params.staffUserId ?? activation.client.assignedStaffUserId,
-        title: declarationTaskTitle(params.declarationType),
-        description: declarationTaskDescription({
-          declarationType: params.declarationType,
-          taxYear: params.taxYear,
-          period: params.period,
-          periodStart: params.periodStart,
-          periodEnd: params.periodEnd,
-        }),
+        title: intake
+          ? intakeTaskTitle(params.declarationType)
+          : declarationTaskTitle(params.declarationType),
+        description: intake
+          ? `Complete the income tax intake for ${params.taxYear}.`
+          : declarationTaskDescription({
+              declarationType: params.declarationType,
+              taxYear: params.taxYear,
+              period: params.period,
+              periodStart: params.periodStart,
+              periodEnd: params.periodEnd,
+            }),
         dueDate: declarationTaskDueDate(params.deadlineDate),
       })
       .returning();
@@ -1474,10 +2571,305 @@ export async function createTaxDeclarationForTeam(
       declaration,
       serviceOrder,
       task,
+      intake,
       entitlement: activation.entitlement,
       product: activation.product,
       created: true,
     };
+  });
+}
+
+export async function requestTaxDeclarationOrderForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    declarationType: TaxDeclarationType;
+    taxYear: number;
+    orderedByUserId?: string | null;
+  },
+) {
+  if (!isIncomeTaxDeclaration(params.declarationType)) {
+    throw new Error("Only income tax declarations can be ordered by clients");
+  }
+
+  const [profile] = await db
+    .select({
+      workspaceType: teams.workspaceType,
+      plan: teams.plan,
+      subscriptionStatus: teams.subscriptionStatus,
+      clientKind: taxClients.clientKind,
+    })
+    .from(teams)
+    .leftJoin(taxClients, eq(taxClients.teamId, teams.id))
+    .where(eq(teams.id, params.teamId))
+    .limit(1);
+
+  if (!profile) {
+    throw new Error("Team not found");
+  }
+
+  if (
+    !isDeclarationTypeAllowedForWorkspace(
+      profile.workspaceType,
+      params.declarationType,
+    )
+  ) {
+    throw new Error("Declaration type is not available for this workspace");
+  }
+
+  if (
+    profile.clientKind &&
+    !isDeclarationTypeAllowedForClientKind(
+      profile.clientKind,
+      params.declarationType,
+    )
+  ) {
+    throw new Error("Declaration type is not available for this tax client");
+  }
+
+  const productCode = productCodeForDeclarationType(params.declarationType);
+  const [product] = await db
+    .select()
+    .from(taxServiceProducts)
+    .where(
+      and(
+        eq(taxServiceProducts.code, productCode),
+        eq(taxServiceProducts.active, true),
+      ),
+    )
+    .limit(1);
+
+  if (!product) {
+    throw new Error("Tax service product not found");
+  }
+
+  const client = await ensureTaxClientForTeam(db, {
+    teamId: params.teamId,
+    clientKind:
+      profile.clientKind ??
+      clientKindForDeclarationType(params.declarationType),
+  });
+
+  const [subjectLink] = await db
+    .select({
+      subjectId: taxClientSubjects.subjectId,
+    })
+    .from(taxClientSubjects)
+    .where(
+      and(
+        eq(taxClientSubjects.clientId, client.id),
+        eq(taxClientSubjects.accessStatus, "active"),
+      ),
+    )
+    .orderBy(
+      sql`case ${taxClientSubjects.role} when 'primary' then 0 when 'business_entity' then 1 when 'partner' then 2 else 3 end`,
+    )
+    .limit(1);
+
+  if (!subjectLink) {
+    throw new Error("Tax subject not found");
+  }
+
+  const [existingDeclaration] = await db
+    .select({
+      id: taxDeclarations.id,
+      serviceOrderId: taxDeclarations.serviceOrderId,
+    })
+    .from(taxDeclarations)
+    .where(
+      and(
+        eq(taxDeclarations.clientId, client.id),
+        eq(taxDeclarations.subjectId, subjectLink.subjectId),
+        eq(taxDeclarations.declarationType, params.declarationType),
+        eq(taxDeclarations.taxYear, params.taxYear),
+        isNull(taxDeclarations.periodStart),
+        isNull(taxDeclarations.periodEnd),
+      ),
+    )
+    .limit(1);
+
+  if (existingDeclaration) {
+    return {
+      status: "existing" as const,
+      declarationId: existingDeclaration.id,
+      serviceOrderId: existingDeclaration.serviceOrderId,
+      checkoutUrl: null,
+      product,
+    };
+  }
+
+  const [existingOrder] = await db
+    .select()
+    .from(taxServiceOrders)
+    .where(
+      and(
+        eq(taxServiceOrders.clientId, client.id),
+        eq(taxServiceOrders.teamId, params.teamId),
+        eq(taxServiceOrders.productId, product.id),
+        eq(taxServiceOrders.taxYear, params.taxYear),
+        isNull(taxServiceOrders.period),
+        inArray(taxServiceOrders.status, pendingTaxOrderStatuses),
+      ),
+    )
+    .limit(1);
+
+  const [activeEntitlement] = await db
+    .select({
+      id: taxEntitlements.id,
+      source: taxEntitlements.source,
+      sourceRef: taxEntitlements.sourceRef,
+    })
+    .from(taxEntitlements)
+    .where(
+      and(
+        eq(taxEntitlements.clientId, client.id),
+        eq(taxEntitlements.productId, product.id),
+        eq(taxEntitlements.status, "active"),
+      ),
+    )
+    .limit(1);
+
+  if (activeEntitlement) {
+    const result = await createTaxDeclarationForTeam(db, {
+      teamId: params.teamId,
+      declarationType: params.declarationType,
+      taxYear: params.taxYear,
+      deadlineDate: `${params.taxYear + 1}-05-01`,
+      orderedByUserId: params.orderedByUserId,
+      entitlementSource: activeEntitlement.source,
+      entitlementSourceRef: activeEntitlement.sourceRef,
+      serviceOrderId: existingOrder?.id,
+      serviceOrderStatus: "in_progress",
+    });
+
+    return {
+      status: "ready" as const,
+      declarationId: result.declaration.id,
+      serviceOrderId:
+        result.serviceOrder?.id ?? result.declaration.serviceOrderId,
+      checkoutUrl: null,
+      product,
+    };
+  }
+
+  if (includedInTeamPlan(product.includedInPlans, profile.plan)) {
+    const result = await createTaxDeclarationForTeam(db, {
+      teamId: params.teamId,
+      declarationType: params.declarationType,
+      taxYear: params.taxYear,
+      deadlineDate: `${params.taxYear + 1}-05-01`,
+      orderedByUserId: params.orderedByUserId,
+      entitlementSource: "team_plan",
+      entitlementSourceRef: profile.plan,
+      serviceOrderId: existingOrder?.id,
+      serviceOrderStatus: "in_progress",
+    });
+
+    return {
+      status: "ready" as const,
+      declarationId: result.declaration.id,
+      serviceOrderId:
+        result.serviceOrder?.id ?? result.declaration.serviceOrderId,
+      checkoutUrl: null,
+      product,
+    };
+  }
+
+  const [serviceOrder] = existingOrder
+    ? [existingOrder]
+    : await db
+        .insert(taxServiceOrders)
+        .values({
+          clientId: client.id,
+          teamId: params.teamId,
+          productId: product.id,
+          taxYear: params.taxYear,
+          period: null,
+          status: "ordered",
+          orderedByUserId: params.orderedByUserId ?? null,
+        })
+        .returning();
+
+  if (!serviceOrder) {
+    throw new Error("Failed to create tax service order");
+  }
+
+  return {
+    status: "payment_required" as const,
+    declarationId: null,
+    serviceOrderId: serviceOrder.id,
+    checkoutUrl: null,
+    product,
+  };
+}
+
+export async function activatePaidTaxServiceOrderForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    serviceOrderId: string;
+    polarOrderId: string;
+  },
+) {
+  const [serviceOrder] = await db
+    .select({
+      id: taxServiceOrders.id,
+      clientId: taxServiceOrders.clientId,
+      teamId: taxServiceOrders.teamId,
+      taxYear: taxServiceOrders.taxYear,
+      period: taxServiceOrders.period,
+      status: taxServiceOrders.status,
+      orderedByUserId: taxServiceOrders.orderedByUserId,
+      productId: taxServiceOrders.productId,
+      productCode: taxServiceProducts.code,
+    })
+    .from(taxServiceOrders)
+    .innerJoin(
+      taxServiceProducts,
+      eq(taxServiceProducts.id, taxServiceOrders.productId),
+    )
+    .where(
+      and(
+        eq(taxServiceOrders.id, params.serviceOrderId),
+        eq(taxServiceOrders.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+
+  if (!serviceOrder) {
+    throw new Error("Tax service order not found");
+  }
+
+  if (!serviceOrder.taxYear) {
+    throw new Error("Tax service order is missing a tax year");
+  }
+
+  if (
+    serviceOrder.productCode !== "income_tax_private" &&
+    serviceOrder.productCode !== "income_tax_entrepreneur"
+  ) {
+    throw new Error("Only paid income tax orders can be activated in V1");
+  }
+
+  await db
+    .update(taxServiceOrders)
+    .set({
+      status: "paid",
+      polarOrderId: params.polarOrderId,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(taxServiceOrders.id, serviceOrder.id));
+
+  return createTaxDeclarationForTeam(db, {
+    teamId: params.teamId,
+    declarationType: serviceOrder.productCode,
+    taxYear: serviceOrder.taxYear,
+    period: serviceOrder.period,
+    deadlineDate: `${serviceOrder.taxYear + 1}-05-01`,
+    orderedByUserId: serviceOrder.orderedByUserId,
+    entitlementSource: "polar_order",
+    entitlementSourceRef: params.polarOrderId,
+    serviceOrderId: serviceOrder.id,
   });
 }
 
@@ -2034,8 +3426,12 @@ export async function activateTaxServiceForTeam(
     productCode: TaxServiceProductCode;
     clientKind?: TaxClientKind;
     staffUserId?: string | null;
+    entitlementSource?: TaxEntitlementSource;
+    entitlementSourceRef?: string | null;
   },
 ) {
+  const entitlementSource = params.entitlementSource ?? "manual";
+  const entitlementSourceRef = params.entitlementSourceRef ?? null;
   const client = await ensureTaxClientForTeam(db, {
     teamId: params.teamId,
     clientKind: params.clientKind,
@@ -2065,8 +3461,10 @@ export async function activateTaxServiceForTeam(
         and(
           eq(taxEntitlements.clientId, client.id),
           eq(taxEntitlements.productId, product.id),
-          eq(taxEntitlements.source, "manual"),
-          isNull(taxEntitlements.sourceRef),
+          eq(taxEntitlements.source, entitlementSource),
+          entitlementSourceRef
+            ? eq(taxEntitlements.sourceRef, entitlementSourceRef)
+            : isNull(taxEntitlements.sourceRef),
         ),
       )
       .limit(1);
@@ -2087,7 +3485,8 @@ export async function activateTaxServiceForTeam(
             clientId: client.id,
             teamId: params.teamId,
             productId: product.id,
-            source: "manual",
+            source: entitlementSource,
+            sourceRef: entitlementSourceRef,
             status: "active",
           })
           .returning();

@@ -338,6 +338,7 @@ export default async function AdminClientPage({ params }: PageProps) {
                   <TableRow>
                     <TableHead>Declaration</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Intake</TableHead>
                     <TableHead>Period</TableHead>
                     <TableHead>Deadline</TableHead>
                     <TableHead>Approved</TableHead>
@@ -364,8 +365,13 @@ export default async function AdminClientPage({ params }: PageProps) {
                         <TableCell>
                           <div className="flex flex-col">
                             <span className="text-sm font-medium">
-                              {label(declaration.declarationType)}{" "}
-                              {declaration.taxYear}
+                              <Link
+                                href={`/admin/${client.id}/declarations/${declaration.id}`}
+                                className="hover:underline"
+                              >
+                                {label(declaration.declarationType)}{" "}
+                                {declaration.taxYear}
+                              </Link>
                             </span>
                             <span className="text-xs text-muted-foreground">
                               {subject?.displayName ?? "Unknown subject"}
@@ -381,6 +387,33 @@ export default async function AdminClientPage({ params }: PageProps) {
                           >
                             {label(declaration.status)}
                           </span>
+                        </TableCell>
+                        <TableCell>
+                          {declaration.intake ? (
+                            <div className="flex flex-col">
+                              <span
+                                className={`text-sm ${statusTone(
+                                  declaration.intake.status,
+                                )}`}
+                              >
+                                {label(declaration.intake.status)}
+                              </span>
+                              {declaration.intake.progress && (
+                                <span className="text-muted-foreground text-xs">
+                                  {
+                                    declaration.intake.progress
+                                      .completedRequired
+                                  }
+                                  /{declaration.intake.progress.totalRequired}{" "}
+                                  required
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">
+                              -
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell>
                           <span className="text-sm text-muted-foreground">

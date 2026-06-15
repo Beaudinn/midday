@@ -225,5 +225,15 @@ export class ClassifyImageProcessor extends BaseProcessor<ClassifyImagePayload> 
       "documents",
       { jobId: `tax-mandate-match_${teamId}_${fileName}_${Date.now()}` },
     );
+
+    await triggerJob(
+      "match-tax-intake-document",
+      {
+        filePath: pathTokens,
+        teamId,
+      },
+      "documents",
+      { jobId: `tax-intake-match_${teamId}_${fileName}_${Date.now()}` },
+    );
   }
 }

@@ -46,3 +46,12 @@ export const matchTaxMandateDocumentSchema = z.object({
 export type MatchTaxMandateDocumentPayload = z.infer<
   typeof matchTaxMandateDocumentSchema
 >;
+
+export const matchTaxIntakeDocumentSchema = z.object({
+  filePath: z.array(z.string()),
+  teamId: z.string().uuid(),
+});
+
+export type MatchTaxIntakeDocumentPayload = z.infer<
+  typeof matchTaxIntakeDocumentSchema
+>;

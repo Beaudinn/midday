@@ -1,6 +1,7 @@
 import type { Context } from "@api/rest/types";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
+  activatePaidTaxServiceOrderForTeam,
   getTeamById,
   getTeamOwnerContact,
   updateTeamById,
@@ -91,6 +92,47 @@ app.openapi(
 
     try {
       switch (event.type) {
+        case "order.created":
+        case "order.updated": {
+          logger.debug("Polar order event ignored for tax billing V1", {
+            type: event.type,
+            orderId: event.data?.id,
+          });
+          break;
+        }
+
+        case "order.paid": {
+          const teamId = event.data?.metadata?.teamId as string | undefined;
+          const taxServiceOrderId = event.data?.metadata?.taxServiceOrderId as
+            | string
+            | undefined;
+          const polarOrderId = event.data?.id as string | undefined;
+
+          if (!teamId || !taxServiceOrderId || !polarOrderId) {
+            logger.warn("Paid Polar order missing tax metadata", {
+              orderId: polarOrderId,
+              teamId,
+              taxServiceOrderId,
+            });
+            break;
+          }
+
+          const result = await activatePaidTaxServiceOrderForTeam(db, {
+            teamId,
+            serviceOrderId: taxServiceOrderId,
+            polarOrderId,
+          });
+
+          logger.info("Paid tax service order activated", {
+            teamId,
+            taxServiceOrderId,
+            polarOrderId,
+            declarationId: result.declaration.id,
+          });
+
+          break;
+        }
+
         case "subscription.created": {
           const teamId = event.data.metadata?.teamId as string | undefined;
 

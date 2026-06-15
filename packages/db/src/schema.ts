@@ -290,6 +290,38 @@ export const taxDeclarationStatusEnum = pgEnum("tax_declaration_status", [
   "rejected",
   "cancelled",
 ]);
+export const taxIntakeStatusEnum = pgEnum("tax_intake_status", [
+  "not_started",
+  "in_progress",
+  "needs_info",
+  "submitted",
+  "in_review",
+  "accepted",
+]);
+export const taxIntakeSubjectScopeEnum = pgEnum("tax_intake_subject_scope", [
+  "primary",
+  "partner",
+  "joint",
+  "household",
+]);
+export const taxIntakeAnswerSourceEnum = pgEnum("tax_intake_answer_source", [
+  "client",
+  "partner",
+  "admin",
+  "document_ai",
+  "system",
+]);
+export const taxIntakeAnswerStatusEnum = pgEnum("tax_intake_answer_status", [
+  "draft",
+  "suggested",
+  "confirmed",
+  "rejected",
+  "needs_review",
+]);
+export const taxIntakeDocumentStatusEnum = pgEnum(
+  "tax_intake_document_status",
+  ["suggested", "linked", "rejected", "reviewed"],
+);
 export const taxMandateTypeEnum = pgEnum("tax_mandate_type", [
   "VIA",
   "SBA",
@@ -4603,6 +4635,243 @@ export const taxDeclarations = pgTable(
   ],
 );
 
+export const taxDeclarationIntakes = pgTable(
+  "tax_declaration_intakes",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    declarationId: uuid("declaration_id").notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    partnerSubjectId: uuid("partner_subject_id"),
+    templateKey: text("template_key").notNull(),
+    templateVersion: integer("template_version").notNull(),
+    status: taxIntakeStatusEnum().default("not_started").notNull(),
+    submittedAt: timestamp("submitted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    reviewedAt: timestamp("reviewed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    acceptedAt: timestamp("accepted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    metadata: jsonb().default(sql`'{}'::jsonb`).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_declaration_intakes_declaration_key").on(table.declarationId),
+    index("tax_declaration_intakes_client_status_idx").on(
+      table.clientId,
+      table.status,
+    ),
+    index("tax_declaration_intakes_team_status_idx").on(
+      table.teamId,
+      table.status,
+    ),
+    index("tax_declaration_intakes_subject_idx").on(table.subjectId),
+    foreignKey({
+      columns: [table.declarationId],
+      foreignColumns: [taxDeclarations.id],
+      name: "tax_declaration_intakes_declaration_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_declaration_intakes_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_declaration_intakes_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.subjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_declaration_intakes_subject_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.partnerSubjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_declaration_intakes_partner_subject_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxIntakeAnswers = pgTable(
+  "tax_intake_answers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    intakeId: uuid("intake_id").notNull(),
+    declarationId: uuid("declaration_id").notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    documentId: uuid("document_id"),
+    sectionKey: text("section_key").notNull(),
+    questionKey: text("question_key").notNull(),
+    subjectScope: taxIntakeSubjectScopeEnum("subject_scope").notNull(),
+    value: jsonb().notNull(),
+    source: taxIntakeAnswerSourceEnum().default("client").notNull(),
+    confidence: integer(),
+    status: taxIntakeAnswerStatusEnum().default("draft").notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    updatedByUserId: uuid("updated_by_user_id"),
+    reviewedByStaffUserId: uuid("reviewed_by_staff_user_id"),
+    reviewedAt: timestamp("reviewed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_intake_answers_question_source_key").on(
+      table.intakeId,
+      table.questionKey,
+      table.subjectScope,
+      table.source,
+    ),
+    index("tax_intake_answers_intake_status_idx").on(
+      table.intakeId,
+      table.status,
+    ),
+    index("tax_intake_answers_team_status_idx").on(table.teamId, table.status),
+    index("tax_intake_answers_document_idx").on(table.documentId),
+    foreignKey({
+      columns: [table.intakeId],
+      foreignColumns: [taxDeclarationIntakes.id],
+      name: "tax_intake_answers_intake_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.declarationId],
+      foreignColumns: [taxDeclarations.id],
+      name: "tax_intake_answers_declaration_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_intake_answers_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_intake_answers_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.documentId],
+      foreignColumns: [documents.id],
+      name: "tax_intake_answers_document_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.createdByUserId],
+      foreignColumns: [users.id],
+      name: "tax_intake_answers_created_by_user_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.updatedByUserId],
+      foreignColumns: [users.id],
+      name: "tax_intake_answers_updated_by_user_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.reviewedByStaffUserId],
+      foreignColumns: [users.id],
+      name: "tax_intake_answers_reviewed_by_staff_user_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const taxIntakeDocuments = pgTable(
+  "tax_intake_documents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    intakeId: uuid("intake_id").notNull(),
+    declarationId: uuid("declaration_id").notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    documentId: uuid("document_id").notNull(),
+    documentType: text("document_type"),
+    taxYear: integer("tax_year"),
+    sectionKey: text("section_key").notNull(),
+    subjectScope: taxIntakeSubjectScopeEnum("subject_scope")
+      .default("primary")
+      .notNull(),
+    confidence: integer(),
+    status: taxIntakeDocumentStatusEnum().default("suggested").notNull(),
+    rawExtraction: jsonb("raw_extraction").default(sql`'{}'::jsonb`).notNull(),
+    redactedExtraction: jsonb("redacted_extraction")
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("tax_intake_documents_intake_document_section_key").on(
+      table.intakeId,
+      table.documentId,
+      table.sectionKey,
+    ),
+    index("tax_intake_documents_intake_status_idx").on(
+      table.intakeId,
+      table.status,
+    ),
+    index("tax_intake_documents_team_status_idx").on(
+      table.teamId,
+      table.status,
+    ),
+    index("tax_intake_documents_document_idx").on(table.documentId),
+    foreignKey({
+      columns: [table.intakeId],
+      foreignColumns: [taxDeclarationIntakes.id],
+      name: "tax_intake_documents_intake_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.declarationId],
+      foreignColumns: [taxDeclarations.id],
+      name: "tax_intake_documents_declaration_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_intake_documents_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_intake_documents_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.documentId],
+      foreignColumns: [documents.id],
+      name: "tax_intake_documents_document_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 export const taxMandates = pgTable(
   "tax_mandates",
   {
@@ -4682,6 +4951,9 @@ export const taxTasks = pgTable(
     teamId: uuid("team_id").notNull(),
     subjectId: uuid("subject_id"),
     mandateId: uuid("mandate_id"),
+    declarationId: uuid("declaration_id"),
+    intakeId: uuid("intake_id"),
+    questionKey: text("question_key"),
     assignedToUserId: uuid("assigned_to_user_id"),
     assignedToStaffUserId: uuid("assigned_to_staff_user_id"),
     title: text().notNull(),
@@ -4704,6 +4976,8 @@ export const taxTasks = pgTable(
     index("tax_tasks_team_status_idx").on(table.teamId, table.status),
     index("tax_tasks_subject_idx").on(table.subjectId),
     index("tax_tasks_mandate_idx").on(table.mandateId),
+    index("tax_tasks_declaration_idx").on(table.declarationId),
+    index("tax_tasks_intake_idx").on(table.intakeId),
     foreignKey({
       columns: [table.clientId],
       foreignColumns: [taxClients.id],
@@ -4723,6 +4997,16 @@ export const taxTasks = pgTable(
       columns: [table.mandateId],
       foreignColumns: [taxMandates.id],
       name: "tax_tasks_mandate_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.declarationId],
+      foreignColumns: [taxDeclarations.id],
+      name: "tax_tasks_declaration_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.intakeId],
+      foreignColumns: [taxDeclarationIntakes.id],
+      name: "tax_tasks_intake_id_fkey",
     }).onDelete("set null"),
     foreignKey({
       columns: [table.assignedToUserId],

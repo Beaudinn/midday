@@ -5,6 +5,7 @@ import {
   protectedProcedure,
 } from "@api/trpc/init";
 import {
+  acceptTaxIntakeForTeam,
   activateTaxServiceForTeam,
   confirmTaxMandateDocumentMatch,
   createTaxDeclarationForTeam,
@@ -12,11 +13,14 @@ import {
   getAdminClientTeamById,
   getAdminClientTeams,
   getPlatformStaffByUserId,
+  getTaxDeclarationIntakeForTeam,
   getTaxServiceProducts,
   queueTaxDigipoortMandateActivation,
   queueTaxDigipoortMandateRequest,
   recordTaxAuditEvent,
+  requestTaxIntakeInfoForTeam,
   updateTaxDeclarationStatusForTeam,
+  updateTaxIntakeAnswerStatusForTeam,
 } from "@midday/db/queries";
 import { triggerJob } from "@midday/job-client";
 import { z } from "zod";
@@ -51,6 +55,11 @@ const taxDeclarationStatusSchema = z.enum([
   "accepted",
   "rejected",
   "cancelled",
+]);
+const taxIntakeAnswerReviewStatusSchema = z.enum([
+  "confirmed",
+  "rejected",
+  "needs_review",
 ]);
 const optionalDateSchema = z
   .string()
@@ -283,6 +292,122 @@ export const adminRouter = createTRPCRouter({
       });
 
       return declaration;
+    }),
+
+  getTaxDeclarationIntake: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        declarationId: z.string().uuid(),
+      }),
+    )
+    .query(async ({ ctx: { db, platformStaff }, input }) => {
+      const intake = await getTaxDeclarationIntakeForTeam(db, {
+        teamId: input.teamId,
+        declarationId: input.declarationId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_intake.view",
+        resourceType: "tax_declaration",
+        resourceId: input.declarationId,
+      });
+
+      return intake;
+    }),
+
+  reviewIntakeAnswer: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        answerId: z.string().uuid(),
+        status: taxIntakeAnswerReviewStatusSchema,
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const answer = await updateTaxIntakeAnswerStatusForTeam(db, {
+        teamId: input.teamId,
+        answerId: input.answerId,
+        status: input.status,
+        staffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_intake_answer.review",
+        resourceType: "tax_intake_answer",
+        resourceId: input.answerId,
+        metadata: {
+          status: input.status,
+          intakeId: answer.intakeId,
+          questionKey: answer.questionKey,
+        },
+      });
+
+      return answer;
+    }),
+
+  requestTaxIntakeInfo: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        intakeId: z.string().uuid(),
+        questionKey: z.string().trim().min(1).max(120),
+        title: z.string().trim().min(1).max(160),
+        description: z.string().trim().max(1000).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const task = await requestTaxIntakeInfoForTeam(db, {
+        teamId: input.teamId,
+        intakeId: input.intakeId,
+        questionKey: input.questionKey,
+        title: input.title,
+        description: input.description,
+        staffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_intake.request_info",
+        resourceType: "tax_task",
+        resourceId: task.id,
+        metadata: {
+          intakeId: input.intakeId,
+          questionKey: input.questionKey,
+        },
+      });
+
+      return task;
+    }),
+
+  acceptIntake: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        intakeId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const intake = await acceptTaxIntakeForTeam(db, {
+        teamId: input.teamId,
+        intakeId: input.intakeId,
+        staffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_intake.accept",
+        resourceType: "tax_declaration_intake",
+        resourceId: input.intakeId,
+      });
+
+      return intake;
     }),
 
   confirmTaxMandateDocumentMatch: adminProcedure

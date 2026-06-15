@@ -19,6 +19,7 @@ const icons = {
   "/tracker": () => <Icons.Tracker size={20} />,
   "/customers": () => <Icons.Customers size={20} />,
   "/vault": () => <Icons.Vault size={20} />,
+  "/tax": () => <Icons.Tax size={20} />,
   "/settings": () => <Icons.Settings size={20} />,
   "/apps": () => <Icons.Apps size={20} />,
   "/inbox": () => <Icons.Inbox2 size={20} />,
@@ -88,6 +89,10 @@ const items: MenuItem[] = [
   {
     path: "/vault",
     name: "Vault",
+  },
+  {
+    path: "/tax",
+    name: "Aangiftes",
   },
   {
     path: "/apps",
