@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { formatAmount, secondsToHoursAndMinutes } from "@/utils/format";
+import { isBusinessWorkspace } from "@/utils/workspace-features";
 
 interface WidgetCardProps {
   label: string;
@@ -35,6 +36,7 @@ export function WidgetCards() {
   const { data } = useSuspenseQuery(trpc.overview.summary.queryOptions());
   const { data: user } = useUserQuery();
   const locale = user?.locale;
+  const isBusiness = isBusinessWorkspace(user?.team?.workspaceType);
 
   const cashValue =
     formatAmount({
@@ -109,30 +111,36 @@ export function WidgetCards() {
         value={cashValue}
         detail={cashDetail}
       />
-      <WidgetCard
-        label="Open Invoices"
-        href="/invoices?statuses=draft,scheduled,unpaid"
-        value={openValue}
-        detail={openDetail}
-      />
-      <WidgetCard
-        label="Unbilled Time"
-        href="/tracker?status=in_progress"
-        value={unbilledValue}
-        detail={unbilledDetail}
-      />
+      {isBusiness && (
+        <>
+          <WidgetCard
+            label="Open Invoices"
+            href="/invoices?statuses=draft,scheduled,unpaid"
+            value={openValue}
+            detail={openDetail}
+          />
+          <WidgetCard
+            label="Unbilled Time"
+            href="/tracker?status=in_progress"
+            value={unbilledValue}
+            detail={unbilledDetail}
+          />
+        </>
+      )}
       <WidgetCard
         label="Transactions"
         href="/transactions?tab=review"
         value={reviewValue}
         detail={reviewDetail}
       />
-      <WidgetCard
-        label="Runway"
-        href="/reports?scrollTo=runway"
-        value={runwayValue}
-        detail={runwayDetail}
-      />
+      {isBusiness && (
+        <WidgetCard
+          label="Runway"
+          href="/reports?scrollTo=runway"
+          value={runwayValue}
+          detail={runwayDetail}
+        />
+      )}
       <WidgetCard
         label="Inbox"
         href="/inbox?status=pending"

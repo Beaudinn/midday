@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { formatAmount, secondsToHoursAndMinutes } from "@/utils/format";
+import { isBusinessWorkspace } from "@/utils/workspace-features";
 
 function getTimeBasedGreeting(timezone?: string): string {
   const userTimezone =
@@ -50,10 +51,14 @@ type SummaryData = {
   runway: number;
 };
 
-function buildInsights(data: SummaryData, locale?: string | null): Insight[] {
+function buildInsights(
+  data: SummaryData,
+  options: { includeBusinessInsights: boolean; locale?: string | null },
+): Insight[] {
   const insights: Insight[] = [];
+  const { includeBusinessInsights, locale } = options;
 
-  if (data.openInvoices.count > 0) {
+  if (includeBusinessInsights && data.openInvoices.count > 0) {
     const amount = formatAmount({
       amount: data.openInvoices.totalAmount,
       currency: data.openInvoices.currency,
@@ -69,7 +74,7 @@ function buildInsights(data: SummaryData, locale?: string | null): Insight[] {
     });
   }
 
-  if (data.unbilledTime.totalDuration > 0) {
+  if (includeBusinessInsights && data.unbilledTime.totalDuration > 0) {
     const label =
       data.unbilledTime.totalAmount > 0
         ? formatAmount({
@@ -112,7 +117,7 @@ function buildInsights(data: SummaryData, locale?: string | null): Insight[] {
     });
   }
 
-  if (data.runway > 0) {
+  if (includeBusinessInsights && data.runway > 0) {
     insights.push({
       key: "runway",
       href: "/reports?scrollTo=runway",
@@ -326,7 +331,10 @@ export function WelcomeSummary() {
   const { data: user } = useUserQuery();
   const trpc = useTRPC();
   const { data } = useSuspenseQuery(trpc.overview.summary.queryOptions());
-  const insights = buildInsights(data, user?.locale);
+  const insights = buildInsights(data, {
+    includeBusinessInsights: isBusinessWorkspace(user?.team?.workspaceType),
+    locale: user?.locale,
+  });
 
   return <SummaryTicker insights={insights} />;
 }

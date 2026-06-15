@@ -4,12 +4,15 @@ import { Icons } from "@midday/ui/icons";
 import { flushSync } from "react-dom";
 import { useChatState } from "@/components/chat/chat-context";
 import { useInboxUpload } from "@/hooks/use-inbox-upload";
+import { useUserQuery } from "@/hooks/use-user";
+import { isBusinessWorkspace } from "@/utils/workspace-features";
 
 const CHAT_ACTIONS = [
   {
     label: "Create Invoice",
     icon: Icons.Invoice,
     message: "Create a new invoice",
+    businessOnly: true,
   },
   {
     label: "Add Transaction",
@@ -20,11 +23,13 @@ const CHAT_ACTIONS = [
     label: "Add Customer",
     icon: Icons.Customers,
     message: "Add a new customer",
+    businessOnly: true,
   },
   {
     label: "Track Time",
     icon: Icons.Tracker,
     message: "Start tracking time",
+    businessOnly: true,
   },
 ] as const;
 
@@ -37,6 +42,11 @@ const iconClassName =
 export function QuickActions({ onChatOpen }: { onChatOpen: () => void }) {
   const { sendMessage, setMessages, setChatTitle } = useChatState();
   const { openFilePicker } = useInboxUpload();
+  const { data: user } = useUserQuery();
+  const actions = CHAT_ACTIONS.filter(
+    (action) =>
+      !action.businessOnly || isBusinessWorkspace(user?.team?.workspaceType),
+  );
 
   const handleChatAction = (message: string) => {
     flushSync(() => {
@@ -49,7 +59,7 @@ export function QuickActions({ onChatOpen }: { onChatOpen: () => void }) {
 
   return (
     <div className="flex items-center justify-center gap-3 pt-2 pb-12 w-full flex-wrap">
-      {CHAT_ACTIONS.map(({ label, icon: Icon, message }) => (
+      {actions.map(({ label, icon: Icon, message }) => (
         <button
           key={label}
           type="button"

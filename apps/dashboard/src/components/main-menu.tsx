@@ -5,6 +5,11 @@ import { Icons } from "@midday/ui/icons";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useUserQuery } from "@/hooks/use-user";
+import {
+  isBusinessWorkspace,
+  type WorkspaceType,
+} from "@/utils/workspace-features";
 
 const icons = {
   "/": () => <Icons.Overview size={20} />,
@@ -19,7 +24,14 @@ const icons = {
   "/inbox": () => <Icons.Inbox2 size={20} />,
 } as const;
 
-const items = [
+type MenuItem = {
+  path: string;
+  name: string;
+  children?: { path: string; name: string }[];
+  businessOnly?: boolean;
+};
+
+const items: MenuItem[] = [
   {
     path: "/",
     name: "Overview",
@@ -55,6 +67,7 @@ const items = [
   {
     path: "/invoices",
     name: "Invoices",
+    businessOnly: true,
     children: [
       { path: "/invoices/products", name: "Products" },
       { path: "/invoices?invoiceType=create", name: "Create new" },
@@ -63,11 +76,13 @@ const items = [
   {
     path: "/tracker",
     name: "Tracker",
+    businessOnly: true,
     children: [{ path: "/tracker?create=true", name: "Create new" }],
   },
   {
     path: "/customers",
     name: "Customers",
+    businessOnly: true,
     children: [{ path: "/customers?createCustomer=true", name: "Create new" }],
   },
   {
@@ -96,12 +111,14 @@ const items = [
   },
 ];
 
+function visibleMenuItems(workspaceType?: WorkspaceType | null) {
+  return items.filter(
+    (item) => !item.businessOnly || isBusinessWorkspace(workspaceType),
+  );
+}
+
 interface ItemProps {
-  item: {
-    path: string;
-    name: string;
-    children?: { path: string; name: string }[];
-  };
+  item: MenuItem;
   isActive: boolean;
   isExpanded: boolean;
   isItemExpanded: boolean;
@@ -281,6 +298,8 @@ export function MainMenu({ onSelect, isExpanded = false }: Props) {
   const pathname = usePathname();
   const part = pathname?.split("/")[1];
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const { data: user } = useUserQuery();
+  const menuItems = visibleMenuItems(user?.team?.workspaceType);
 
   // Reset expanded item when sidebar expands/collapses
   useEffect(() => {
@@ -291,7 +310,7 @@ export function MainMenu({ onSelect, isExpanded = false }: Props) {
     <div className="mt-4 w-full">
       <nav className="w-full">
         <div className="flex flex-col gap-2">
-          {items.map((item) => {
+          {menuItems.map((item) => {
             const isActive =
               (pathname === "/" && item.path === "/") ||
               (pathname !== "/" && item.path.startsWith(`/${part}`));
