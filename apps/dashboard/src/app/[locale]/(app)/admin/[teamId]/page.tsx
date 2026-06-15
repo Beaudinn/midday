@@ -12,6 +12,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AdminTaxClientActions } from "@/components/admin/tax-client-actions";
+import {
+  AdminTaxDeclarationCreateAction,
+  AdminTaxDeclarationStatusActions,
+} from "@/components/admin/tax-declaration-actions";
 import { AdminTaxMandateDigipoortActions } from "@/components/admin/tax-mandate-digipoort-actions";
 import { AdminTaxMandateMatchActions } from "@/components/admin/tax-mandate-match-actions";
 import { getQueryClient, trpc } from "@/trpc/server";
@@ -53,6 +57,10 @@ function statusTone(status?: string | null) {
     return "text-emerald-600 dark:text-emerald-400";
   }
 
+  if (["approved", "submitted", "accepted"].includes(status)) {
+    return "text-emerald-600 dark:text-emerald-400";
+  }
+
   if (
     [
       "needs_review",
@@ -62,6 +70,10 @@ function statusTone(status?: string | null) {
       "open",
       "queued",
       "processing",
+      "collecting",
+      "ready_for_review",
+      "in_review",
+      "queued_for_submission",
     ].includes(status)
   ) {
     return "text-amber-600 dark:text-amber-400";
@@ -121,6 +133,9 @@ export default async function AdminClientPage({ params }: PageProps) {
   const activationMatches =
     taxClient?.documentMatches.filter((match) => match.status === "matched") ??
     [];
+  const subjectsById = new Map(
+    taxClient?.subjects.map((subject) => [subject.id, subject]) ?? [],
+  );
 
   return (
     <main className="min-h-screen px-6 py-6 md:px-10">
@@ -234,10 +249,14 @@ export default async function AdminClientPage({ params }: PageProps) {
         </div>
 
         <div className="space-y-6">
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-5">
             <Stat
               label="Services"
               value={taxClient?.entitlements.length ?? 0}
+            />
+            <Stat
+              label="Declarations"
+              value={taxClient?.declarations.length ?? 0}
             />
             <Stat label="Mandates" value={taxClient?.mandates.length ?? 0} />
             <Stat label="Open tasks" value={openTasks.length} />
@@ -289,6 +308,115 @@ export default async function AdminClientPage({ params }: PageProps) {
             ) : (
               <div className="p-4">
                 <EmptyState>No active tax services.</EmptyState>
+              </div>
+            )}
+          </div>
+
+          <div className="border border-border">
+            <div className="border-b border-border px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-medium">Declarations</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Dossier metadata for income tax and VAT returns.
+                  </p>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {taxClient?.declarations.length ?? 0} total
+                </span>
+              </div>
+            </div>
+
+            <AdminTaxDeclarationCreateAction
+              teamId={client.id}
+              workspaceType={client.workspaceType}
+            />
+
+            {taxClient?.declarations.length ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Declaration</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead>Deadline</TableHead>
+                    <TableHead>Approved</TableHead>
+                    <TableHead>Submitted</TableHead>
+                    <TableHead>Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {taxClient.declarations.map((declaration) => {
+                    const subject = subjectsById.get(declaration.subjectId);
+                    const partner = declaration.partnerSubjectId
+                      ? subjectsById.get(declaration.partnerSubjectId)
+                      : null;
+                    const period =
+                      declaration.period ??
+                      (declaration.periodStart || declaration.periodEnd
+                        ? `${formatDate(declaration.periodStart)} - ${formatDate(
+                            declaration.periodEnd,
+                          )}`
+                        : "Annual");
+
+                    return (
+                      <TableRow key={declaration.id}>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">
+                              {label(declaration.declarationType)}{" "}
+                              {declaration.taxYear}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {subject?.displayName ?? "Unknown subject"}
+                              {partner ? ` + ${partner.displayName}` : ""}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span
+                            className={`text-sm ${statusTone(
+                              declaration.status,
+                            )}`}
+                          >
+                            {label(declaration.status)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-muted-foreground">
+                            {period}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-muted-foreground">
+                            {formatDate(declaration.deadlineDate)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-muted-foreground">
+                            {formatDate(declaration.approvedAt)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-muted-foreground">
+                            {formatDate(declaration.submittedAt)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <AdminTaxDeclarationStatusActions
+                            teamId={client.id}
+                            declarationId={declaration.id}
+                            status={declaration.status}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="p-4">
+                <EmptyState>No tax declaration dossiers yet.</EmptyState>
               </div>
             )}
           </div>

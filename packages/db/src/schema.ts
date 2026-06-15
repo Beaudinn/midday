@@ -273,6 +273,23 @@ export const taxServiceOrderStatusEnum = pgEnum("tax_service_order_status", [
   "completed",
   "cancelled",
 ]);
+export const taxDeclarationTypeEnum = pgEnum("tax_declaration_type", [
+  "income_tax_private",
+  "income_tax_entrepreneur",
+  "vat_return",
+]);
+export const taxDeclarationStatusEnum = pgEnum("tax_declaration_status", [
+  "draft",
+  "collecting",
+  "ready_for_review",
+  "in_review",
+  "approved",
+  "queued_for_submission",
+  "submitted",
+  "accepted",
+  "rejected",
+  "cancelled",
+]);
 export const taxMandateTypeEnum = pgEnum("tax_mandate_type", [
   "VIA",
   "SBA",
@@ -4476,6 +4493,113 @@ export const taxServiceOrders = pgTable(
       foreignColumns: [users.id],
       name: "tax_service_orders_created_by_staff_user_id_fkey",
     }).onDelete("set null"),
+  ],
+);
+
+export const taxDeclarations = pgTable(
+  "tax_declarations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    clientId: uuid("client_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    partnerSubjectId: uuid("partner_subject_id"),
+    subjectRelationshipId: uuid("subject_relationship_id"),
+    entitlementId: uuid("entitlement_id"),
+    serviceOrderId: uuid("service_order_id"),
+    declarationType: taxDeclarationTypeEnum("declaration_type").notNull(),
+    taxYear: integer("tax_year").notNull(),
+    period: text(),
+    periodStart: date("period_start"),
+    periodEnd: date("period_end"),
+    deadlineDate: date("deadline_date"),
+    status: taxDeclarationStatusEnum().default("draft").notNull(),
+    approvedAt: timestamp("approved_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    submittedAt: timestamp("submitted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    providerReference: text("provider_reference"),
+    metadata: jsonb().default(sql`'{}'::jsonb`).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("tax_declarations_year_key")
+      .on(table.clientId, table.subjectId, table.declarationType, table.taxYear)
+      .where(sql`${table.periodStart} IS NULL AND ${table.periodEnd} IS NULL`),
+    uniqueIndex("tax_declarations_period_key")
+      .on(
+        table.clientId,
+        table.subjectId,
+        table.declarationType,
+        table.taxYear,
+        table.periodStart,
+        table.periodEnd,
+      )
+      .where(
+        sql`${table.periodStart} IS NOT NULL AND ${table.periodEnd} IS NOT NULL`,
+      ),
+    index("tax_declarations_client_status_idx").on(
+      table.clientId,
+      table.status,
+    ),
+    index("tax_declarations_team_status_idx").on(table.teamId, table.status),
+    index("tax_declarations_subject_idx").on(table.subjectId),
+    index("tax_declarations_service_order_idx").on(table.serviceOrderId),
+    foreignKey({
+      columns: [table.clientId],
+      foreignColumns: [taxClients.id],
+      name: "tax_declarations_client_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "tax_declarations_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.subjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_declarations_subject_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.partnerSubjectId],
+      foreignColumns: [taxSubjects.id],
+      name: "tax_declarations_partner_subject_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.subjectRelationshipId],
+      foreignColumns: [taxSubjectRelationships.id],
+      name: "tax_declarations_subject_relationship_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.entitlementId],
+      foreignColumns: [taxEntitlements.id],
+      name: "tax_declarations_entitlement_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.serviceOrderId],
+      foreignColumns: [taxServiceOrders.id],
+      name: "tax_declarations_service_order_id_fkey",
+    }).onDelete("set null"),
+    check(
+      "tax_declarations_period_bounds_check",
+      sql`(
+        (${table.periodStart} IS NULL AND ${table.periodEnd} IS NULL)
+        OR (${table.periodStart} IS NOT NULL AND ${table.periodEnd} IS NOT NULL AND ${table.periodStart} <= ${table.periodEnd})
+      )`,
+    ),
+    check(
+      "tax_declarations_vat_period_required_check",
+      sql`${table.declarationType} <> 'vat_return' OR (${table.periodStart} IS NOT NULL AND ${table.periodEnd} IS NOT NULL)`,
+    ),
   ],
 );
 

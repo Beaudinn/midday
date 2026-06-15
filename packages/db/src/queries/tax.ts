@@ -5,10 +5,12 @@ import {
   documents,
   taxClientSubjects,
   taxClients,
+  taxDeclarations,
   taxDigipoortJobs,
   taxEntitlements,
   taxMandateDocumentMatches,
   taxMandates,
+  taxServiceOrders,
   taxServiceProducts,
   taxSubjectRelationships,
   taxSubjects,
@@ -29,6 +31,9 @@ export type TaxDigipoortOperation =
   typeof taxDigipoortJobs.$inferSelect.operation;
 export type TaxSubjectRelationshipType =
   typeof taxSubjectRelationships.$inferSelect.relationshipType;
+export type TaxDeclarationType =
+  typeof taxDeclarations.$inferSelect.declarationType;
+export type TaxDeclarationStatus = typeof taxDeclarations.$inferSelect.status;
 export type TaxDigipoortJobExecutionContext = {
   job: typeof taxDigipoortJobs.$inferSelect;
   mandate: {
@@ -191,6 +196,74 @@ function subjectRoleForClientKind(clientKind: TaxClientKind) {
   return clientKind === "company" ? "business_entity" : "primary";
 }
 
+function productCodeForDeclarationType(
+  declarationType: TaxDeclarationType,
+): TaxServiceProductCode {
+  switch (declarationType) {
+    case "income_tax_private":
+      return "income_tax_private";
+    case "income_tax_entrepreneur":
+      return "income_tax_entrepreneur";
+    case "vat_return":
+      return "vat_return";
+  }
+}
+
+function clientKindForDeclarationType(
+  declarationType: TaxDeclarationType,
+): TaxClientKind | undefined {
+  switch (declarationType) {
+    case "income_tax_private":
+      return "private_person";
+    case "income_tax_entrepreneur":
+    case "vat_return":
+      return "sole_proprietor";
+  }
+}
+
+function isIncomeTaxDeclaration(declarationType: TaxDeclarationType) {
+  return (
+    declarationType === "income_tax_private" ||
+    declarationType === "income_tax_entrepreneur"
+  );
+}
+
+function declarationTaskTitle(declarationType: TaxDeclarationType) {
+  return isIncomeTaxDeclaration(declarationType)
+    ? "Prepare income tax declaration"
+    : "Prepare VAT return";
+}
+
+function declarationTaskDescription(params: {
+  declarationType: TaxDeclarationType;
+  taxYear: number;
+  period?: string | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+}) {
+  if (isIncomeTaxDeclaration(params.declarationType)) {
+    return `Prepare the income tax declaration dossier for ${params.taxYear}.`;
+  }
+
+  const period =
+    params.period ||
+    [params.periodStart, params.periodEnd].filter(Boolean).join(" to ") ||
+    String(params.taxYear);
+
+  return `Prepare the VAT return dossier for ${period}.`;
+}
+
+function declarationTaskDueDate(deadlineDate?: string | null) {
+  if (deadlineDate) {
+    return deadlineDate;
+  }
+
+  const dueDate = new Date();
+  dueDate.setDate(dueDate.getDate() + 14);
+
+  return dueDate.toISOString().slice(0, 10);
+}
+
 export function defaultTaxClientKindForWorkspace(
   workspaceType: "business" | "personal" | "household",
 ): TaxClientKind {
@@ -234,6 +307,7 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     subjects,
     subjectRelationships,
     entitlements,
+    declarations,
     mandates,
     tasks,
     documentMatches,
@@ -283,6 +357,29 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
         eq(taxServiceProducts.id, taxEntitlements.productId),
       )
       .where(eq(taxEntitlements.clientId, client.id)),
+    db
+      .select({
+        id: taxDeclarations.id,
+        subjectId: taxDeclarations.subjectId,
+        partnerSubjectId: taxDeclarations.partnerSubjectId,
+        subjectRelationshipId: taxDeclarations.subjectRelationshipId,
+        entitlementId: taxDeclarations.entitlementId,
+        serviceOrderId: taxDeclarations.serviceOrderId,
+        declarationType: taxDeclarations.declarationType,
+        taxYear: taxDeclarations.taxYear,
+        period: taxDeclarations.period,
+        periodStart: taxDeclarations.periodStart,
+        periodEnd: taxDeclarations.periodEnd,
+        deadlineDate: taxDeclarations.deadlineDate,
+        status: taxDeclarations.status,
+        approvedAt: taxDeclarations.approvedAt,
+        submittedAt: taxDeclarations.submittedAt,
+        providerReference: taxDeclarations.providerReference,
+        createdAt: taxDeclarations.createdAt,
+      })
+      .from(taxDeclarations)
+      .where(eq(taxDeclarations.clientId, client.id))
+      .orderBy(desc(taxDeclarations.createdAt)),
     db
       .select({
         id: taxMandates.id,
@@ -364,6 +461,7 @@ export async function getTaxClientByTeamId(db: Database, teamId: string) {
     subjects,
     subjectRelationships,
     entitlements,
+    declarations,
     mandates,
     tasks,
     documentMatches,
@@ -1106,6 +1204,302 @@ export async function endTaxPartnerRelationshipForTeam(
 
     return relationship;
   });
+}
+
+export async function createTaxDeclarationForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    declarationType: TaxDeclarationType;
+    taxYear: number;
+    period?: string | null;
+    periodStart?: string | null;
+    periodEnd?: string | null;
+    deadlineDate?: string | null;
+    clientKind?: TaxClientKind;
+    staffUserId?: string | null;
+  },
+) {
+  if (Boolean(params.periodStart) !== Boolean(params.periodEnd)) {
+    throw new Error("Period start and end date must be provided together");
+  }
+
+  if (
+    params.periodStart &&
+    params.periodEnd &&
+    params.periodStart > params.periodEnd
+  ) {
+    throw new Error("Period end date must be after period start date");
+  }
+
+  if (
+    params.declarationType === "vat_return" &&
+    (!params.periodStart || !params.periodEnd)
+  ) {
+    throw new Error("VAT return declarations require a period start and end");
+  }
+
+  const [existingClient] = await db
+    .select({ clientKind: taxClients.clientKind })
+    .from(taxClients)
+    .where(eq(taxClients.teamId, params.teamId))
+    .limit(1);
+
+  const activation = await activateTaxServiceForTeam(db, {
+    teamId: params.teamId,
+    productCode: productCodeForDeclarationType(params.declarationType),
+    clientKind:
+      existingClient?.clientKind ??
+      params.clientKind ??
+      clientKindForDeclarationType(params.declarationType),
+    staffUserId: params.staffUserId,
+  });
+
+  return db.transaction(async (tx) => {
+    const [subjectLink] = await tx
+      .select({
+        subjectId: taxClientSubjects.subjectId,
+      })
+      .from(taxClientSubjects)
+      .where(
+        and(
+          eq(taxClientSubjects.clientId, activation.client.id),
+          eq(taxClientSubjects.accessStatus, "active"),
+        ),
+      )
+      .orderBy(
+        sql`case ${taxClientSubjects.role} when 'primary' then 0 when 'business_entity' then 1 when 'partner' then 2 else 3 end`,
+      )
+      .limit(1);
+
+    if (!subjectLink) {
+      throw new Error("Tax subject not found");
+    }
+
+    const [activePartnerRelationship] = isIncomeTaxDeclaration(
+      params.declarationType,
+    )
+      ? await tx
+          .select({
+            id: taxSubjectRelationships.id,
+            relatedSubjectId: taxSubjectRelationships.relatedSubjectId,
+            relationshipType: taxSubjectRelationships.relationshipType,
+            fiscalPartner: taxSubjectRelationships.fiscalPartner,
+            validFrom: taxSubjectRelationships.validFrom,
+            validTo: taxSubjectRelationships.validTo,
+          })
+          .from(taxSubjectRelationships)
+          .where(
+            and(
+              eq(taxSubjectRelationships.clientId, activation.client.id),
+              eq(
+                taxSubjectRelationships.primarySubjectId,
+                subjectLink.subjectId,
+              ),
+              eq(taxSubjectRelationships.status, "active"),
+              eq(taxSubjectRelationships.fiscalPartner, true),
+            ),
+          )
+          .orderBy(desc(taxSubjectRelationships.createdAt))
+          .limit(1)
+      : [];
+
+    const declarationBaseFilter = [
+      eq(taxDeclarations.clientId, activation.client.id),
+      eq(taxDeclarations.subjectId, subjectLink.subjectId),
+      eq(taxDeclarations.declarationType, params.declarationType),
+      eq(taxDeclarations.taxYear, params.taxYear),
+    ];
+    const periodFilter =
+      params.periodStart && params.periodEnd
+        ? [
+            eq(taxDeclarations.periodStart, params.periodStart),
+            eq(taxDeclarations.periodEnd, params.periodEnd),
+          ]
+        : [
+            isNull(taxDeclarations.periodStart),
+            isNull(taxDeclarations.periodEnd),
+          ];
+    const [existingDeclaration] = await tx
+      .select()
+      .from(taxDeclarations)
+      .where(and(...declarationBaseFilter, ...periodFilter))
+      .limit(1);
+
+    if (existingDeclaration) {
+      return {
+        declaration: existingDeclaration,
+        serviceOrder: null,
+        task: null,
+        entitlement: activation.entitlement,
+        product: activation.product,
+        created: false,
+      };
+    }
+
+    const [serviceOrder] = await tx
+      .insert(taxServiceOrders)
+      .values({
+        clientId: activation.client.id,
+        teamId: params.teamId,
+        productId: activation.product.id,
+        taxYear: params.taxYear,
+        period: params.period ?? null,
+        status: "ordered",
+        createdByStaffUserId: params.staffUserId ?? null,
+      })
+      .returning();
+
+    if (!serviceOrder) {
+      throw new Error("Failed to create tax service order");
+    }
+
+    const metadata = {
+      createdFrom: "admin",
+      createdByStaffUserId: params.staffUserId ?? null,
+      partnerSnapshot: activePartnerRelationship
+        ? {
+            relationshipId: activePartnerRelationship.id,
+            relationshipType: activePartnerRelationship.relationshipType,
+            fiscalPartner: activePartnerRelationship.fiscalPartner,
+            validFrom: activePartnerRelationship.validFrom,
+            validTo: activePartnerRelationship.validTo,
+          }
+        : null,
+    };
+
+    const [declaration] = await tx
+      .insert(taxDeclarations)
+      .values({
+        clientId: activation.client.id,
+        teamId: params.teamId,
+        subjectId: subjectLink.subjectId,
+        partnerSubjectId: activePartnerRelationship?.relatedSubjectId ?? null,
+        subjectRelationshipId: activePartnerRelationship?.id ?? null,
+        entitlementId: activation.entitlement.id,
+        serviceOrderId: serviceOrder.id,
+        declarationType: params.declarationType,
+        taxYear: params.taxYear,
+        period: params.period ?? null,
+        periodStart: params.periodStart ?? null,
+        periodEnd: params.periodEnd ?? null,
+        deadlineDate: params.deadlineDate ?? null,
+        status: "draft",
+        metadata,
+      })
+      .returning();
+
+    if (!declaration) {
+      throw new Error("Failed to create tax declaration");
+    }
+
+    const [task] = await tx
+      .insert(taxTasks)
+      .values({
+        clientId: activation.client.id,
+        teamId: params.teamId,
+        subjectId: subjectLink.subjectId,
+        assignedToUserId: activation.client.primaryUserId,
+        assignedToStaffUserId:
+          params.staffUserId ?? activation.client.assignedStaffUserId,
+        title: declarationTaskTitle(params.declarationType),
+        description: declarationTaskDescription({
+          declarationType: params.declarationType,
+          taxYear: params.taxYear,
+          period: params.period,
+          periodStart: params.periodStart,
+          periodEnd: params.periodEnd,
+        }),
+        dueDate: declarationTaskDueDate(params.deadlineDate),
+      })
+      .returning();
+
+    if (!task) {
+      throw new Error("Failed to create tax declaration task");
+    }
+
+    return {
+      declaration,
+      serviceOrder,
+      task,
+      entitlement: activation.entitlement,
+      product: activation.product,
+      created: true,
+    };
+  });
+}
+
+export async function updateTaxDeclarationStatusForTeam(
+  db: Database,
+  params: {
+    teamId: string;
+    declarationId: string;
+    status: TaxDeclarationStatus;
+    providerReference?: string | null;
+    staffUserId?: string | null;
+  },
+) {
+  const [existingDeclaration] = await db
+    .select()
+    .from(taxDeclarations)
+    .where(
+      and(
+        eq(taxDeclarations.id, params.declarationId),
+        eq(taxDeclarations.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+
+  if (!existingDeclaration) {
+    throw new Error("Tax declaration not found");
+  }
+
+  const now = new Date().toISOString();
+  const metadata =
+    existingDeclaration.metadata &&
+    typeof existingDeclaration.metadata === "object" &&
+    !Array.isArray(existingDeclaration.metadata)
+      ? (existingDeclaration.metadata as Record<string, unknown>)
+      : {};
+  const nextMetadata: Record<string, unknown> = {
+    ...metadata,
+    statusUpdatedAt: now,
+    statusUpdatedByStaffUserId: params.staffUserId ?? null,
+  };
+  const values: Partial<typeof taxDeclarations.$inferInsert> = {
+    status: params.status,
+    updatedAt: now,
+    metadata: nextMetadata,
+  };
+
+  if (params.providerReference !== undefined) {
+    values.providerReference = params.providerReference;
+  }
+
+  if (params.status === "approved" && !existingDeclaration.approvedAt) {
+    values.approvedAt = now;
+    nextMetadata.approvedByStaffUserId = params.staffUserId ?? null;
+  }
+
+  if (
+    ["submitted", "accepted"].includes(params.status) &&
+    !existingDeclaration.submittedAt
+  ) {
+    values.submittedAt = now;
+    nextMetadata.submittedByStaffUserId = params.staffUserId ?? null;
+  }
+
+  const [declaration] = await db
+    .update(taxDeclarations)
+    .set(values)
+    .where(eq(taxDeclarations.id, existingDeclaration.id))
+    .returning();
+
+  if (!declaration) {
+    throw new Error("Failed to update tax declaration status");
+  }
+
+  return declaration;
 }
 
 export async function queueTaxDigipoortMandateActivation(

@@ -7,6 +7,7 @@ import {
 import {
   activateTaxServiceForTeam,
   confirmTaxMandateDocumentMatch,
+  createTaxDeclarationForTeam,
   ensureTaxClientForTeam,
   getAdminClientTeamById,
   getAdminClientTeams,
@@ -15,6 +16,7 @@ import {
   queueTaxDigipoortMandateActivation,
   queueTaxDigipoortMandateRequest,
   recordTaxAuditEvent,
+  updateTaxDeclarationStatusForTeam,
 } from "@midday/db/queries";
 import { triggerJob } from "@midday/job-client";
 import { z } from "zod";
@@ -33,6 +35,72 @@ const taxServiceProductCodeSchema = z.enum([
   "via_retrieval",
   "sba_monitoring",
 ]);
+const taxDeclarationTypeSchema = z.enum([
+  "income_tax_private",
+  "income_tax_entrepreneur",
+  "vat_return",
+]);
+const taxDeclarationStatusSchema = z.enum([
+  "draft",
+  "collecting",
+  "ready_for_review",
+  "in_review",
+  "approved",
+  "queued_for_submission",
+  "submitted",
+  "accepted",
+  "rejected",
+  "cancelled",
+]);
+const optionalDateSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .nullable()
+  .optional();
+const createTaxDeclarationInputSchema = z
+  .object({
+    teamId: z.string().uuid(),
+    declarationType: taxDeclarationTypeSchema,
+    taxYear: z.number().int().min(2000).max(2100),
+    period: z.string().trim().max(64).nullable().optional(),
+    periodStart: optionalDateSchema,
+    periodEnd: optionalDateSchema,
+    deadlineDate: optionalDateSchema,
+    clientKind: taxClientKindSchema.optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (Boolean(input.periodStart) !== Boolean(input.periodEnd)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Period start and end date must be provided together",
+        path: ["periodStart"],
+      });
+    }
+
+    if (
+      input.periodStart &&
+      input.periodEnd &&
+      input.periodStart > input.periodEnd
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Period end date must be after period start date",
+        path: ["periodEnd"],
+      });
+    }
+
+    if (
+      input.declarationType === "vat_return" &&
+      (!input.periodStart || !input.periodEnd)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "VAT return declarations require a period start and end",
+        path: ["periodStart"],
+      });
+    }
+  });
 
 export const adminRouter = createTRPCRouter({
   me: protectedProcedure.query(async ({ ctx: { db, session } }) => {
@@ -145,6 +213,76 @@ export const adminRouter = createTRPCRouter({
       });
 
       return result;
+    }),
+
+  createTaxDeclaration: adminProcedure
+    .input(createTaxDeclarationInputSchema)
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const result = await createTaxDeclarationForTeam(db, {
+        teamId: input.teamId,
+        declarationType: input.declarationType,
+        taxYear: input.taxYear,
+        period: input.period,
+        periodStart: input.periodStart,
+        periodEnd: input.periodEnd,
+        deadlineDate: input.deadlineDate,
+        clientKind: input.clientKind,
+        staffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: result.created
+          ? "admin.tax_declaration.create"
+          : "admin.tax_declaration.reuse_existing",
+        resourceType: "tax_declaration",
+        resourceId: result.declaration.id,
+        metadata: {
+          declarationType: input.declarationType,
+          taxYear: input.taxYear,
+          period: input.period ?? null,
+          periodStart: input.periodStart ?? null,
+          periodEnd: input.periodEnd ?? null,
+          serviceOrderId: result.serviceOrder?.id ?? null,
+          taskId: result.task?.id ?? null,
+        },
+      });
+
+      return result;
+    }),
+
+  updateTaxDeclarationStatus: adminProcedure
+    .input(
+      z.object({
+        teamId: z.string().uuid(),
+        declarationId: z.string().uuid(),
+        status: taxDeclarationStatusSchema,
+        providerReference: z.string().trim().max(255).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx: { db, platformStaff }, input }) => {
+      const declaration = await updateTaxDeclarationStatusForTeam(db, {
+        teamId: input.teamId,
+        declarationId: input.declarationId,
+        status: input.status,
+        providerReference: input.providerReference,
+        staffUserId: platformStaff.userId,
+      });
+
+      await recordTaxAuditEvent(db, {
+        teamId: input.teamId,
+        actorStaffUserId: platformStaff.userId,
+        action: "admin.tax_declaration.status_update",
+        resourceType: "tax_declaration",
+        resourceId: input.declarationId,
+        metadata: {
+          status: input.status,
+          providerReference: input.providerReference ?? null,
+        },
+      });
+
+      return declaration;
     }),
 
   confirmTaxMandateDocumentMatch: adminProcedure
